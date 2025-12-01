@@ -1,8 +1,8 @@
-use std::env;
 mod app;
+mod renderer;
+
+use app::run;
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let app = app::App::new();
-    app.run(&args);
+    run().unwrap();
 }

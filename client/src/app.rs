@@ -1,56 +1,237 @@
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
-pub struct App {
-    running: bool,
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+use winit::{
+    application::ApplicationHandler,
+    event::*,
+    event_loop::{ActiveEventLoop, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::Window,
+};
+
+use crate::renderer::RenderState;
+
+pub struct State {
+    pub window: Arc<Window>,
+    pub render_state: RenderState,
 }
 
-const FIXED_UPDATE_RATE: i32 = 60;
-const FIXED_UPDATE_DELTATIME: f32 = 1.0 / (FIXED_UPDATE_RATE as f32);
+impl State {
+    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
+        let render_state = RenderState::new(&window).await?;
+
+        Ok(Self {
+            window,
+            render_state,
+        })
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.render_state.resize(width, height);
+    }
+
+    pub fn update(&mut self) {}
+
+    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.window.request_redraw();
+        let render_state = &mut self.render_state;
+
+        if !render_state.is_surface_configured {
+            return Ok(());
+        }
+
+        let output = render_state.surface.get_current_texture()?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder =
+            render_state
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 1.0,
+                            g: 0.0,
+                            b: 1.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_pipeline(&render_state.pipeline.pipeline);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        render_state.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        Ok(())
+    }
+
+    fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        match (code, is_pressed) {
+            (KeyCode::Escape, true) => event_loop.exit(),
+            _ => {}
+        }
+    }
+}
+
+pub struct App {
+    #[cfg(target_arch = "wasm32")]
+    proxy: Option<winit::event_loop::EventLoopProxy<State>>,
+    state: Option<State>,
+}
 
 impl App {
-    fn initialize(&self) {}
-    fn shutdown(&self) {}
-    fn fixed_update(&self, dt: f32) {
-        println!("fixed dt: {}", dt);
+    pub fn new(#[cfg(target_arch = "wasm32")] event_loop: &EventLoop<State>) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let proxy = Some(event_loop.create_proxy());
+        Self {
+            state: None,
+            #[cfg(target_arch = "wasm32")]
+            proxy,
+        }
     }
-    fn update(&self, dt: f32) {
-        println!("update dt: {}", dt);
-    }
-    fn render(&self) {}
-    fn should_shutdown(&self) -> bool {
-        !self.running
-    }
+}
 
-    pub fn new() -> App {
-        App { running: true }
-    }
+impl ApplicationHandler<State> for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        #[allow(unused_mut)]
+        let mut window_attributes = Window::default_attributes();
 
-    pub fn run(&self, args: &Vec<String>) {
-        for arg in args {
-            println!("{}", arg);
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowAttributesExtWebSys;
+
+            const CANVAS_ID: &str = "canvas";
+
+            let window = wgpu::web_sys::window().unwrap_throw();
+            let document = window.document().unwrap_throw();
+            let canvas = document.get_element_by_id(CANVAS_ID).unwrap_throw();
+            let html_canvas_element = canvas.unchecked_into();
+            window_attributes = window_attributes.with_canvas(Some(html_canvas_element));
         }
 
-        self.initialize();
+        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let mut last_time = Instant::now();
-        let mut time_since_fixed: f32 = 0.0;
-        while !self.should_shutdown() {
-            let now = Instant::now();
-            let duration = now - last_time;
-            let dt: f32 = Duration::as_secs_f32(&duration);
-            last_time = now;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.state = Some(pollster::block_on(State::new(window)).unwrap());
+        }
 
-            time_since_fixed += dt;
-            while time_since_fixed > FIXED_UPDATE_DELTATIME {
-                time_since_fixed -= FIXED_UPDATE_DELTATIME;
-                self.fixed_update(FIXED_UPDATE_DELTATIME);
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(proxy) = self.proxy.take() {
+                wasm_bindgen_futures::spawn_local(async move {
+                    assert!(
+                        proxy
+                            .send_event(State::new(window).await.expect("Unable to create canvas."))
+                            .is_ok()
+                    )
+                });
             }
-
-            self.update(dt);
-
-            self.render();
         }
-
-        self.shutdown();
     }
+
+    #[allow(unused_mut)]
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
+        // This is where proxy.send_event() ends up
+        #[cfg(target_arch = "wasm32")]
+        {
+            event.window.request_redraw();
+            event.resize(
+                event.window.inner_size().width,
+                event.window.inner_size().height,
+            );
+        }
+        self.state = Some(event);
+    }
+
+    #[allow(unused_mut)]
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        let state = match &mut self.state {
+            Some(canvas) => canvas,
+            None => return,
+        };
+
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => state.resize(size.width, size.height),
+            WindowEvent::RedrawRequested => {
+                state.update();
+                match state.render() {
+                    Ok(_) => {}
+                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                        let size = state.window.inner_size();
+                        state.resize(size.width, size.height);
+                    }
+                    Err(e) => {
+                        log::error!("Unable to render {}", e);
+                    }
+                }
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state: key_state,
+                        ..
+                    },
+                ..
+            } => state.handle_key(event_loop, code, key_state.is_pressed()),
+            _ => {}
+        }
+    }
+}
+
+pub fn run() -> anyhow::Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        env_logger::init();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_log::init_with_level(log::Level::Info).unwrap_throw();
+    }
+
+    let event_loop = EventLoop::with_user_event().build()?;
+    let mut app = App::new(
+        #[cfg(target_arch = "wasm32")]
+        &event_loop,
+    );
+    event_loop.run_app(&mut app)?;
+
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn run_web() -> Result<(), wasm_bindgen::JsValue> {
+    console_error_panic_hook::set_once();
+    run().unwrap_throw();
+
+    Ok(())
 }
