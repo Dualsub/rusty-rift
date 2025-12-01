@@ -10,16 +10,16 @@ use winit::{
     window::Window,
 };
 
-use crate::renderer::RenderState;
+use crate::renderer::Renderer;
 
 pub struct State {
     pub window: Arc<Window>,
-    pub render_state: RenderState,
+    pub render_state: Renderer,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let render_state = RenderState::new(&window).await?;
+        let render_state = Renderer::new(&window).await?;
 
         Ok(Self {
             window,
@@ -35,54 +35,7 @@ impl State {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.window.request_redraw();
-        let render_state = &mut self.render_state;
-
-        if !render_state.is_surface_configured {
-            return Ok(());
-        }
-
-        let output = render_state.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder =
-            render_state
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
-                            g: 0.0,
-                            b: 1.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_pipeline(&render_state.pipeline.pipeline);
-            render_pass.draw(0..3, 0..1);
-        }
-
-        render_state.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
+        self.render_state.render()
     }
 
     fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
