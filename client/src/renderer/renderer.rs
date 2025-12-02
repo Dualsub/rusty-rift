@@ -2,13 +2,14 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::renderer::{MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex};
+use crate::renderer::{MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture};
 
 pub struct Renderer {
     pub render_device: RenderDevice,
-    // Temporary
+    // Temporary for dev
     pub pipeline: MaterialPipeline,
     pub mesh: StaticMesh,
+    pub texture: Texture,
 }
 
 impl Renderer {
@@ -132,10 +133,13 @@ impl Renderer {
             index_count: INDICES.len() as u32,
         };
 
+        let texture = render_device.load_texture("../../../assets/textures/grid.dat")?;
+
         Ok(Renderer {
             render_device,
             pipeline: material_pipeline,
-            mesh: mesh,
+            mesh,
+            texture,
         })
     }
 

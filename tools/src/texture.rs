@@ -37,13 +37,11 @@ pub fn load(path: &str, output: &str) -> anyhow::Result<()> {
     file.write_all(&mip_level_count.to_le_bytes())?;
 
     // Image
-    for layer_index in 0..layer_count {
-        for mip_index in 0..mip_level_count {
-            let mip_width: u32 = width >> mip_index;
-            let mip_height: u32 = height >> mip_index;
-
-            println!("Mip: {} {}", mip_width, mip_height);
-
+    for mip_index in 0..mip_level_count {
+        let mip_width: u32 = width >> mip_index;
+        let mip_height: u32 = height >> mip_index;
+        for layer_index in 0..layer_count {
+            println!("Layer: {}, Mip: {} {}", layer_index, mip_width, mip_height);
             if mip_width != width || mip_height != height {
                 // We need to resize
                 let mip =
