@@ -3,6 +3,13 @@ use std::io::prelude::*;
 
 use image::{EncodableLayout, ImageReader, imageops};
 
+pub struct TextureLoadDesc<'a> {
+    pub path: &'a str,
+    pub output: &'a str,
+    pub resize_width: Option<u32>,
+    pub resize_height: Option<u32>,
+}
+
 fn mip_level_count(width: u32, height: u32) -> u32 {
     assert!(width > 0 && height > 0);
 
@@ -10,8 +17,26 @@ fn mip_level_count(width: u32, height: u32) -> u32 {
     32 - max_side.leading_zeros()
 }
 
-pub fn load(path: &str, output: &str) -> anyhow::Result<()> {
-    let img = ImageReader::open(path)?.with_guessed_format()?.decode()?;
+pub fn load(desc: &TextureLoadDesc) -> anyhow::Result<()> {
+    let mut img = ImageReader::open(desc.path)?
+        .with_guessed_format()?
+        .decode()?;
+
+    let width = img.width();
+    let height = img.height();
+
+    let resize_width = desc.resize_width.unwrap_or(width);
+    let resize_height = desc.resize_height.unwrap_or(height);
+    if resize_width != width || resize_height != height {
+        img = image::DynamicImage::ImageRgba8(imageops::resize(
+            &img,
+            resize_width,
+            resize_height,
+            imageops::FilterType::Lanczos3,
+        ));
+
+        println!("Resized image to {}x{}", resize_width, resize_height);
+    }
 
     let width = img.width();
     let height = img.height();
@@ -26,7 +51,7 @@ pub fn load(path: &str, output: &str) -> anyhow::Result<()> {
         width, height, layer_count, color
     );
 
-    let mut file = File::create(output).expect("Could not open output file.");
+    let mut file = File::create(desc.output).expect("Could not open output file.");
 
     // Header
     file.write_all(&width.to_le_bytes())?;
@@ -56,7 +81,7 @@ pub fn load(path: &str, output: &str) -> anyhow::Result<()> {
 
     println!(
         "Packed image into {}. Generated {} layers, each with {} mips",
-        output, layer_count, mip_level_count
+        desc.output, layer_count, mip_level_count
     );
 
     Ok(())

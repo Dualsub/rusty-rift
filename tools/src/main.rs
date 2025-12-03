@@ -21,6 +21,10 @@ enum Commands {
         path: String,
         #[arg(short, long)]
         output: String,
+        #[arg(short = 'x', long = "resize-width")]
+        resize_width: Option<u32>,
+        #[arg(short = 'y', long = "resize-height")]
+        resize_height: Option<u32>,
     },
 }
 
@@ -31,8 +35,17 @@ fn main() {
         Commands::Mesh { path, output } => {
             mesh::load(&path, &output).expect("Failed to load mesh.")
         }
-        Commands::Texture { path, output } => {
-            texture::load(&path, &output).expect("Failed to load texture.")
-        }
+        Commands::Texture {
+            path,
+            output,
+            resize_width,
+            resize_height,
+        } => texture::load(&texture::TextureLoadDesc {
+            path: &path,
+            output: &output,
+            resize_width: *resize_width,
+            resize_height: *resize_height,
+        })
+        .expect("Failed to load texture."),
     }
 }
