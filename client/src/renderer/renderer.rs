@@ -14,7 +14,6 @@ use crate::renderer::{
 // This is so we can store this in a buffer
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UniformBufferData {
-    model_matrix: [[f32; 4]; 4],
     view_matrix: [[f32; 4]; 4],
     projection_matrix: [[f32; 4]; 4],
 }
@@ -26,6 +25,8 @@ pub struct Renderer {
     pub _default_sampler: wgpu::Sampler,
     pub uniform_buffer: Buffer,
     pub uniform_data: UniformBufferData,
+    pub instance_buffer: Buffer,
+    pub instance_data: Vec<[f32; 16]>,
     // Temporary for dev
     pub material_pipeline: MaterialPipeline,
     pub material_instance: MaterialInstance,
@@ -77,6 +78,30 @@ impl Renderer {
 
         let depth_buffer = Renderer::create_depth_buffer(&render_device);
 
+        const INSTANCE_COUNT: usize = 256;
+        const DISTANCE: f32 = 256.0;
+
+        let mut instance_data: Vec<[f32; 16]> = Default::default();
+        instance_data.reserve(INSTANCE_COUNT);
+        for i in 0..INSTANCE_COUNT {
+            let xi = (i as i32 / 8i32) - 4;
+            let zi = (i as i32 % 8i32) - 4;
+
+            instance_data.push(
+                glam::Mat4::from_translation(glam::Vec3 {
+                    x: (xi as f32 * DISTANCE),
+                    y: 0.0,
+                    z: (zi as f32 * DISTANCE),
+                })
+                .to_cols_array(),
+            );
+        }
+
+        let instance_buffer = render_device.create_buffer(&BufferDesc {
+            size: INSTANCE_COUNT * 16 * std::mem::size_of::<f32>(),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+
         let uniform_buffer = render_device.create_buffer(&BufferDesc {
             size: std::mem::size_of::<UniformBufferData>(),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
@@ -109,6 +134,16 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
@@ -118,7 +153,7 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -142,10 +177,14 @@ impl Renderer {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                        resource: instance_buffer.buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
                         resource: wgpu::BindingResource::Sampler(&default_sampler),
                     },
                 ],
@@ -159,10 +198,11 @@ impl Renderer {
             _depth_sampler: depth_sampler,
             uniform_buffer,
             uniform_data: UniformBufferData {
-                model_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
                 view_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
                 projection_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
             },
+            instance_data,
+            instance_buffer,
             material_pipeline,
             material_instance,
             mesh,
@@ -203,18 +243,26 @@ impl Renderer {
 
         let view_matrix = glam::Mat4::from_translation(glam::Vec3 {
             x: 0.0,
-            y: -100.0,
-            z: -300.0,
+            y: -200.0,
+            z: -1200.0,
         });
         self.uniform_data.view_matrix = view_matrix.to_cols_array_2d();
-
-        let mut model_matrix = glam::Mat4::from_cols_array_2d(&self.uniform_data.model_matrix);
-        model_matrix *= glam::Mat4::from_rotation_y(f32::to_radians(1.0));
-        self.uniform_data.model_matrix = model_matrix.to_cols_array_2d();
 
         render_device.write_buffer(
             &self.uniform_buffer,
             bytemuck::cast_slice(&[self.uniform_data]),
+            0,
+        );
+
+        for i in 0..self.instance_data.len() {
+            let mut model_matrix = glam::Mat4::from_cols_array(&self.instance_data[i]);
+            model_matrix *= glam::Mat4::from_rotation_y(f32::to_radians(1.0));
+            self.instance_data[i] = model_matrix.to_cols_array();
+        }
+
+        render_device.write_buffer(
+            &self.instance_buffer,
+            bytemuck::cast_slice(self.instance_data.as_slice()),
             0,
         );
 
@@ -267,7 +315,11 @@ impl Renderer {
                 self.mesh.index_buffer.buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            render_pass.draw_indexed(0..self.mesh.index_count, 0, 0..1);
+            render_pass.draw_indexed(
+                0..self.mesh.index_count,
+                0,
+                0..self.instance_data.len() as u32,
+            );
         }
 
         render_device
