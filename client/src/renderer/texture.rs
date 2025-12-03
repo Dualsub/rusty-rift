@@ -1,5 +1,4 @@
-use std::fs::File;
-use std::io::prelude::*;
+use wgpu::TextureUsages;
 
 use crate::renderer::RenderDevice;
 
@@ -11,6 +10,7 @@ pub struct TextureDesc {
     bytes_per_channel: u32,
     mip_level_count: u32,
     pixels: Vec<u8>, // If empty, othing will be uploaded
+    usage: wgpu::TextureUsages,
 }
 
 impl Default for TextureDesc {
@@ -23,30 +23,44 @@ impl Default for TextureDesc {
             bytes_per_channel: 1,
             mip_level_count: 1,
             pixels: vec![],
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         }
     }
 }
 
 impl TextureDesc {
-    pub fn load(path: &str) -> anyhow::Result<TextureDesc> {
-        let mut file = File::create(path).expect("Could not open file");
+    pub fn load(bytes: &[u8]) -> anyhow::Result<TextureDesc> {
         let mut desc = TextureDesc::default();
 
-        let mut buf = [0u8; 4];
+        let mut read_index: usize = 0;
+        let mut tmp = [0u8; 4];
 
-        file.read_exact(&mut buf)?;
-        desc.width = u32::from_le_bytes(buf);
-        file.read_exact(&mut buf)?;
-        desc.height = u32::from_le_bytes(buf);
-        file.read_exact(&mut buf)?;
-        desc.layer_count = u32::from_le_bytes(buf);
-        file.read_exact(&mut buf)?;
-        desc.channel_count = u32::from_le_bytes(buf);
-        file.read_exact(&mut buf)?;
-        desc.bytes_per_channel = u32::from_le_bytes(buf);
-        file.read_exact(&mut buf)?;
-        desc.mip_level_count = u32::from_le_bytes(buf);
-        file.read_to_end(&mut desc.pixels)?;
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.width = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.height = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.layer_count = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.channel_count = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.bytes_per_channel = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        desc.mip_level_count = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        desc.pixels.resize(bytes.len() - read_index, 0);
+        desc.pixels.copy_from_slice(&bytes[read_index..bytes.len()]);
 
         Ok(desc)
     }
@@ -85,12 +99,13 @@ impl TextureDesc {
 }
 
 pub struct Texture {
-    texture: wgpu::Texture,
+    pub _texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
 }
 
 impl RenderDevice {
-    pub fn load_texture(&self, path: &str) -> anyhow::Result<Texture> {
-        let desc = TextureDesc::load(path)?;
+    pub fn load_texture(&self, bytes: &[u8]) -> anyhow::Result<Texture> {
+        let desc = TextureDesc::load(bytes)?;
         Ok(self.create_texture(&desc))
     }
 
@@ -105,9 +120,9 @@ impl RenderDevice {
             },
             mip_level_count: desc.mip_level_count,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D3,
+            dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: desc.usage,
             view_formats: &[],
         });
 
@@ -150,6 +165,21 @@ impl RenderDevice {
             read_offset += upload_size;
         }
 
-        Texture { texture }
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: None,
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            format: Some(format),
+            array_layer_count: Some(desc.layer_count),
+            aspect: wgpu::TextureAspect::All,
+            base_array_layer: 0,
+            base_mip_level: 0,
+            mip_level_count: Some(desc.mip_level_count),
+            usage: Some(desc.usage),
+        });
+
+        Texture {
+            _texture: texture,
+            view,
+        }
     }
 }

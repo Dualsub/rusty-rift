@@ -7,4 +7,4 @@ pub use mesh::{StaticMesh, StaticMeshVertex};
 pub mod device;
 pub use device::RenderDevice;
 pub mod texture;
-pub use texture::{Texture, TextureDesc};
+pub use texture::Texture;

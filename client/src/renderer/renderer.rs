@@ -2,19 +2,36 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::renderer::{MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture};
+use crate::renderer::{
+    MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture,
+    material::{MaterialInstance, MaterialInstanceDesc, MaterialPipelineDesc},
+};
 
 pub struct Renderer {
     pub render_device: RenderDevice,
+    pub _default_sampler: wgpu::Sampler,
     // Temporary for dev
-    pub pipeline: MaterialPipeline,
+    pub material_pipeline: MaterialPipeline,
+    pub material_instance: MaterialInstance,
     pub mesh: StaticMesh,
-    pub texture: Texture,
+    pub _texture: Texture,
 }
 
 impl Renderer {
     pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
         let render_device = RenderDevice::new(&window).await?;
+
+        let default_sampler = render_device
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
 
         let shader = render_device
             .device
@@ -25,95 +42,63 @@ impl Renderer {
                 ),
             });
 
-        let pipeline_layout =
-            render_device
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Render Pipeline Layout"),
-                    bind_group_layouts: &[],
-                    push_constant_ranges: &[],
-                });
-
-        let pipeline =
-            render_device
-                .device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Pipeline"),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        buffers: &[StaticMeshVertex::desc()],
+        let material_pipeline = render_device.create_material_pipeline(&MaterialPipelineDesc {
+            bind_group_layouts: &[],
+            push_contant_ranges: &[],
+            vertex_shader: &shader,
+            fragment_shader: &shader,
+            layout_entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs_main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: render_device.config.format,
-                            blend: Some(wgpu::BlendState::REPLACE),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        unclipped_depth: false,
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        conservative: false,
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview: None,
-                    cache: None,
-                });
-
-        let material_pipeline = MaterialPipeline {
-            pipeline,
-            pipeline_layout,
-        };
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            vertex_layout: &StaticMeshVertex::desc(),
+        });
 
         const VERTICES: &[StaticMeshVertex] = &[
             StaticMeshVertex {
-                position: [-0.0868241, 0.49240386, 0.0],
+                position: [-0.5, -0.5, 0.0],
                 normal: [0.0, 0.0, 0.0],
                 uvs: [0.0, 0.0, 0.0],
-                color: [0.0, 0.5, 0.5, 1.0],
-            }, // A
+                color: [1.0, 0.0, 0.0, 1.0],
+            }, // bottom-left
             StaticMeshVertex {
-                position: [-0.49513406, 0.06958647, 0.0],
+                position: [0.5, -0.5, 0.0],
                 normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [0.5, 0.5, 0.0, 1.0],
-            }, // B
+                uvs: [1.0, 0.0, 0.0],
+                color: [0.0, 1.0, 0.0, 1.0],
+            }, // bottom-right
             StaticMeshVertex {
-                position: [-0.21918549, -0.44939706, 0.0],
+                position: [0.5, 0.5, 0.0],
                 normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [0.5, 0.5, 0.5, 1.0],
-            }, // C
+                uvs: [1.0, 1.0, 0.0],
+                color: [0.0, 0.0, 1.0, 1.0],
+            }, // top-right
             StaticMeshVertex {
-                position: [0.35966998, -0.3473291, 0.0],
+                position: [-0.5, 0.5, 0.0],
                 normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [0.0, 0.0, 0.5, 1.0],
-            }, // D
-            StaticMeshVertex {
-                position: [0.44147372, 0.2347359, 0.0],
-                normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [0.5, 0.0, 0.0, 1.0],
-            }, // E
+                uvs: [0.0, 1.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            }, // top-left
         ];
 
-        const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+        const INDICES: &[u32] = &[
+            0, 1, 2, // first triangle
+            0, 2, 3, // second triangle
+        ];
 
         let mesh = StaticMesh {
             vertex_buffer: render_device.device.create_buffer_init(
@@ -133,13 +118,32 @@ impl Renderer {
             index_count: INDICES.len() as u32,
         };
 
-        let texture = render_device.load_texture("../../../assets/textures/grid.dat")?;
+        let texture =
+            render_device.load_texture(include_bytes!("../../../assets/textures/grid.dat"))?;
+
+        let material_instance = render_device.create_material_instance(
+            &material_pipeline,
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&default_sampler),
+                    },
+                ],
+            },
+        );
 
         Ok(Renderer {
             render_device,
-            pipeline: material_pipeline,
+            _default_sampler: default_sampler,
+            material_pipeline,
+            material_instance,
             mesh,
-            texture,
+            _texture: texture,
         })
     }
 
@@ -197,10 +201,11 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.pipeline.pipeline);
+            render_pass.set_pipeline(&self.material_pipeline.pipeline);
+            render_pass.set_bind_group(0, &self.material_instance.bindgroup, &[]);
             render_pass.set_vertex_buffer(0, self.mesh.vertex_buffer.slice(..));
             render_pass
-                .set_index_buffer(self.mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                .set_index_buffer(self.mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.mesh.index_count, 0, 0..1);
         }
 
