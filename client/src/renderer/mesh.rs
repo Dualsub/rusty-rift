@@ -1,3 +1,64 @@
+use anyhow::Ok;
+
+use crate::renderer::{Buffer, BufferDesc, RenderDevice};
+
+#[derive(Default)]
+pub struct MeshLoadDesc {
+    pub vertex_data: Vec<u8>,
+    pub indices: Vec<u32>,
+}
+
+impl MeshLoadDesc {
+    pub fn load(bytes: &[u8]) -> anyhow::Result<MeshLoadDesc> {
+        let mut desc = MeshLoadDesc::default();
+
+        let mut read_index: usize = 0;
+        let mut tmp = [0u8; 4];
+
+        tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+        let mesh_count = u32::from_le_bytes(tmp);
+        read_index += 4;
+
+        for _ in 0..mesh_count {
+            // Vertex data read
+            {
+                tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+                let vertex_count = u32::from_le_bytes(tmp);
+                read_index += 4;
+
+                const VERTEX_SIZE: usize = (3 + 3 + 3 + 4) * std::mem::size_of::<f32>();
+                let vertex_data_size = vertex_count as usize * VERTEX_SIZE;
+
+                let write_start = desc.vertex_data.len();
+                desc.vertex_data.resize(write_start + vertex_data_size, 0);
+
+                let read_end = read_index + vertex_data_size;
+                desc.vertex_data[write_start..write_start + vertex_data_size]
+                    .copy_from_slice(&bytes[read_index..read_end]);
+                read_index += vertex_data_size;
+            }
+
+            // Index data read
+            {
+                tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+                let index_count = u32::from_le_bytes(tmp);
+                read_index += 4;
+
+                let index_data_size = index_count as usize * std::mem::size_of::<u32>();
+                let write_start = desc.indices.len();
+                desc.indices.resize(write_start + index_count as usize, 0);
+
+                let read_end = read_index + index_data_size;
+                desc.indices[write_start..write_start + index_count as usize]
+                    .copy_from_slice(bytemuck::cast_slice(&bytes[read_index..read_end]));
+                read_index += index_data_size;
+            }
+        }
+
+        Ok(desc)
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StaticMeshVertex {
@@ -21,7 +82,40 @@ impl StaticMeshVertex {
 }
 
 pub struct StaticMesh {
-    pub vertex_buffer: wgpu::Buffer,
-    pub index_buffer: wgpu::Buffer,
+    pub vertex_buffer: Buffer,
+    pub index_buffer: Buffer,
     pub index_count: u32,
+}
+
+impl RenderDevice {
+    pub fn load_mesh(&self, bytes: &[u8]) -> anyhow::Result<StaticMesh> {
+        let desc = MeshLoadDesc::load(bytes)?;
+        self.create_mesh(&desc)
+    }
+
+    pub fn create_mesh(&self, desc: &MeshLoadDesc) -> anyhow::Result<StaticMesh> {
+        let vertex_buffer = self.create_buffer(&BufferDesc {
+            size: desc.vertex_data.len(),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.write_buffer(&vertex_buffer, desc.vertex_data.as_slice(), 0);
+
+        let index_buffer = self.create_buffer(&BufferDesc {
+            size: desc.indices.len() * std::mem::size_of::<u32>(),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.write_buffer(
+            &index_buffer,
+            bytemuck::cast_slice(desc.indices.as_slice()),
+            0,
+        );
+
+        Ok(StaticMesh {
+            vertex_buffer,
+            index_buffer,
+            index_count: desc.indices.len() as u32,
+        })
+    }
 }

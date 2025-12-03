@@ -1,15 +1,31 @@
 use std::sync::Arc;
-use wgpu::util::DeviceExt;
+use wgpu::{BufferUsages, util::DeviceExt};
 use winit::window::Window;
 
 use crate::renderer::{
-    MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture,
+    BufferDesc, MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture,
+    buffer::Buffer,
     material::{MaterialInstance, MaterialInstanceDesc, MaterialPipelineDesc},
+    mesh::MeshLoadDesc,
+    texture::TextureDesc,
 };
+
+#[repr(C)]
+// This is so we can store this in a buffer
+#[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct UniformBufferData {
+    model_matrix: [[f32; 4]; 4],
+    view_matrix: [[f32; 4]; 4],
+    projection_matrix: [[f32; 4]; 4],
+}
 
 pub struct Renderer {
     pub render_device: RenderDevice,
+    pub depth_buffer: Texture,
+    pub _depth_sampler: wgpu::Sampler,
     pub _default_sampler: wgpu::Sampler,
+    pub uniform_buffer: Buffer,
+    pub uniform_data: UniformBufferData,
     // Temporary for dev
     pub material_pipeline: MaterialPipeline,
     pub material_instance: MaterialInstance,
@@ -18,6 +34,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    fn create_depth_buffer(render_device: &RenderDevice) -> Texture {
+        render_device.create_texture(&TextureDesc {
+            width: render_device.config.width.max(1),
+            height: render_device.config.height.max(1),
+            layer_count: 1,
+            format: Some(wgpu::TextureFormat::Depth32Float),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            ..Default::default()
+        })
+    }
+
     pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
         let render_device = RenderDevice::new(&window).await?;
 
@@ -28,10 +55,32 @@ impl Renderer {
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
-                mipmap_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             });
+
+        let depth_sampler = render_device
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                compare: Some(wgpu::CompareFunction::LessEqual),
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 100.0,
+                ..Default::default()
+            });
+
+        let depth_buffer = Renderer::create_depth_buffer(&render_device);
+
+        let uniform_buffer = render_device.create_buffer(&BufferDesc {
+            size: std::mem::size_of::<UniformBufferData>(),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
 
         let shader = render_device
             .device
@@ -50,6 +99,16 @@ impl Renderer {
             layout_entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
@@ -59,7 +118,7 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -68,55 +127,7 @@ impl Renderer {
             vertex_layout: &StaticMeshVertex::desc(),
         });
 
-        const VERTICES: &[StaticMeshVertex] = &[
-            StaticMeshVertex {
-                position: [-0.5, -0.5, 0.0],
-                normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [1.0, 0.0, 0.0, 1.0],
-            }, // bottom-left
-            StaticMeshVertex {
-                position: [0.5, -0.5, 0.0],
-                normal: [0.0, 0.0, 0.0],
-                uvs: [1.0, 0.0, 0.0],
-                color: [0.0, 1.0, 0.0, 1.0],
-            }, // bottom-right
-            StaticMeshVertex {
-                position: [0.5, 0.5, 0.0],
-                normal: [0.0, 0.0, 0.0],
-                uvs: [1.0, 1.0, 0.0],
-                color: [0.0, 0.0, 1.0, 1.0],
-            }, // top-right
-            StaticMeshVertex {
-                position: [-0.5, 0.5, 0.0],
-                normal: [0.0, 0.0, 0.0],
-                uvs: [0.0, 1.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-            }, // top-left
-        ];
-
-        const INDICES: &[u32] = &[
-            0, 1, 2, // first triangle
-            0, 2, 3, // second triangle
-        ];
-
-        let mesh = StaticMesh {
-            vertex_buffer: render_device.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(VERTICES),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ),
-            index_buffer: render_device.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Index Buffer"),
-                    contents: bytemuck::cast_slice(INDICES),
-                    usage: wgpu::BufferUsages::INDEX,
-                },
-            ),
-            index_count: INDICES.len() as u32,
-        };
+        let mesh = render_device.load_mesh(include_bytes!("../../../assets/models/test.dat"))?;
 
         let texture =
             render_device.load_texture(include_bytes!("../../../assets/textures/grid.dat"))?;
@@ -127,10 +138,14 @@ impl Renderer {
                 entires: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                        resource: uniform_buffer.buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
                         resource: wgpu::BindingResource::Sampler(&default_sampler),
                     },
                 ],
@@ -140,6 +155,14 @@ impl Renderer {
         Ok(Renderer {
             render_device,
             _default_sampler: default_sampler,
+            depth_buffer,
+            _depth_sampler: depth_sampler,
+            uniform_buffer,
+            uniform_data: UniformBufferData {
+                model_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                view_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                projection_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
+            },
             material_pipeline,
             material_instance,
             mesh,
@@ -157,6 +180,8 @@ impl Renderer {
                 .surface
                 .configure(&render_device.device, &render_device.config);
             render_device.is_surface_configured = true;
+
+            self.depth_buffer = Renderer::create_depth_buffer(&render_device);
         }
     }
 
@@ -167,6 +192,33 @@ impl Renderer {
             return Ok(());
         }
 
+        // Update data
+        let projection_matrix = glam::Mat4::perspective_rh(
+            f32::to_radians(60.0),
+            render_device.config.width as f32 / render_device.config.height as f32,
+            0.1,
+            2000.0,
+        );
+        self.uniform_data.projection_matrix = projection_matrix.to_cols_array_2d();
+
+        let view_matrix = glam::Mat4::from_translation(glam::Vec3 {
+            x: 0.0,
+            y: -100.0,
+            z: -300.0,
+        });
+        self.uniform_data.view_matrix = view_matrix.to_cols_array_2d();
+
+        let mut model_matrix = glam::Mat4::from_cols_array_2d(&self.uniform_data.model_matrix);
+        model_matrix *= glam::Mat4::from_rotation_y(f32::to_radians(1.0));
+        self.uniform_data.model_matrix = model_matrix.to_cols_array_2d();
+
+        render_device.write_buffer(
+            &self.uniform_buffer,
+            bytemuck::cast_slice(&[self.uniform_data]),
+            0,
+        );
+
+        // Render
         let output = render_device.surface.get_current_texture()?;
         let view = output
             .texture
@@ -196,16 +248,25 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_buffer.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
             render_pass.set_pipeline(&self.material_pipeline.pipeline);
             render_pass.set_bind_group(0, &self.material_instance.bindgroup, &[]);
-            render_pass.set_vertex_buffer(0, self.mesh.vertex_buffer.slice(..));
-            render_pass
-                .set_index_buffer(self.mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, self.mesh.vertex_buffer.buffer.slice(..));
+            render_pass.set_index_buffer(
+                self.mesh.index_buffer.buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
             render_pass.draw_indexed(0..self.mesh.index_count, 0, 0..1);
         }
 
