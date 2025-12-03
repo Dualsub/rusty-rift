@@ -16,6 +16,7 @@ pub fn load(path: &str, output: &str) -> std::io::Result<()> {
     let meshes = scene.meshes();
     file.write_all(&(meshes.len() as u32).to_le_bytes())?;
 
+    let mut total_vertex_count = 0u32;
     for (mesh_index, mesh) in meshes.enumerate() {
         let vertices = &mesh.vertices();
         let normals = &mesh.normals().expect("No normals.");
@@ -73,7 +74,8 @@ pub fn load(path: &str, output: &str) -> std::io::Result<()> {
         for face in faces {
             assert_eq!(face.num_indices(), 3);
             for index in face.indices() {
-                file.write_all(&(index as &u32).to_le_bytes())?;
+                let index_value = (*index + total_vertex_count);
+                file.write_all(&index_value.to_le_bytes())?;
             }
         }
 
@@ -82,6 +84,8 @@ pub fn load(path: &str, output: &str) -> std::io::Result<()> {
             vertices.len(),
             num_indices
         );
+
+        total_vertex_count += vertices.len() as u32;
     }
 
     Ok(())
