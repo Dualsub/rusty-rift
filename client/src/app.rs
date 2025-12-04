@@ -14,28 +14,25 @@ use crate::renderer::Renderer;
 
 pub struct State {
     pub window: Arc<Window>,
-    pub render_state: Renderer,
+    pub renderer: Renderer,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let render_state = Renderer::new(&window).await?;
+        let renderer = Renderer::new(&window).await?;
 
-        Ok(Self {
-            window,
-            render_state,
-        })
+        Ok(Self { window, renderer })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.render_state.resize(width, height);
+        self.renderer.resize(width, height);
     }
 
     pub fn update(&mut self) {}
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.window.request_redraw();
-        self.render_state.render()
+        self.renderer.render()
     }
 
     fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {

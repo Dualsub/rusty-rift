@@ -11,11 +11,19 @@ use crate::renderer::{
 };
 
 #[repr(C)]
-// This is so we can store this in a buffer
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UniformBufferData {
     view_matrix: Mat4Data,
     projection_matrix: Mat4Data,
+    camera_position: Vec4Data,
+    light_direction: Vec4Data,
+    light_color: Vec4Data,
+}
+
+#[repr(C)]
+#[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    model_matrix: Mat4Data,
 }
 
 pub struct Renderer {
@@ -26,7 +34,7 @@ pub struct Renderer {
     pub uniform_buffer: Buffer,
     pub uniform_data: UniformBufferData,
     pub instance_buffer: Buffer,
-    pub instance_data: Vec<Mat4Data>,
+    pub instance_data: Vec<InstanceData>,
     // Temporary for dev
     pub material_pipeline: MaterialPipeline,
     pub material_instance: MaterialInstance,
@@ -81,20 +89,20 @@ impl Renderer {
         const INSTANCE_COUNT: usize = 256;
         const DISTANCE: f32 = 256.0;
 
-        let mut instance_data: Vec<Mat4Data> = Default::default();
+        let mut instance_data: Vec<InstanceData> = Default::default();
         instance_data.reserve(INSTANCE_COUNT);
         for i in 0..INSTANCE_COUNT {
             let xi = (i as i32 / 8i32) - 4;
             let zi = (i as i32 % 8i32) - 4;
 
-            instance_data.push(
-                Mat4::from_translation(Vec3 {
+            instance_data.push(InstanceData {
+                model_matrix: Mat4::from_translation(Vec3 {
                     x: (xi as f32 * DISTANCE),
                     y: 0.0,
                     z: (zi as f32 * DISTANCE),
                 })
-                .to_cols_array(),
-            );
+                .to_data(),
+            });
         }
 
         let instance_buffer = render_device.create_buffer(&BufferDesc {
@@ -200,6 +208,9 @@ impl Renderer {
             uniform_data: UniformBufferData {
                 view_matrix: Mat4::IDENTITY.to_data(),
                 projection_matrix: Mat4::IDENTITY.to_data(),
+                camera_position: [0.0, 0.0, 0.0, 0.0],
+                light_direction: [0.01, -1.0, 0.01, 0.0],
+                light_color: [1.0, 1.0, 1.0, 1.0],
             },
             instance_data,
             instance_buffer,
@@ -233,6 +244,12 @@ impl Renderer {
         }
 
         // Update data
+        let camera_position = Vec3 {
+            x: 0.0,
+            y: 200.0,
+            z: 600.0,
+        };
+
         let projection_matrix = Mat4::perspective_rh(
             f32::to_radians(60.0),
             render_device.config.width as f32 / render_device.config.height as f32,
@@ -241,23 +258,21 @@ impl Renderer {
         );
         self.uniform_data.projection_matrix = projection_matrix.to_data();
 
-        let view_matrix = Mat4::from_translation(Vec3 {
-            x: 0.0,
-            y: -200.0,
-            z: -1200.0,
-        });
+        let view_matrix = Mat4::from_translation(camera_position).inverse();
         self.uniform_data.view_matrix = view_matrix.to_data();
+        self.uniform_data.camera_position =
+            [camera_position.x, camera_position.y, camera_position.z, 0.0];
 
         render_device.write_buffer(
             &self.uniform_buffer,
-            bytemuck::cast_slice(&[self.uniform_data]),
+            bytemuck::bytes_of(&self.uniform_data),
             0,
         );
 
         for i in 0..self.instance_data.len() {
-            let mut model_matrix = Mat4::from_cols_array(&self.instance_data[i]);
-            model_matrix *= Mat4::from_rotation_y(f32::to_radians(1.0));
-            self.instance_data[i] = model_matrix.to_cols_array();
+            let mut model_matrix = Mat4::from_cols_array(&self.instance_data[i].model_matrix);
+            model_matrix *= Mat4::from_rotation_y(f32::to_radians(0.0));
+            self.instance_data[i].model_matrix = model_matrix.to_data();
         }
 
         render_device.write_buffer(

@@ -49,8 +49,14 @@ impl MeshLoadDesc {
                 desc.indices.resize(write_start + index_count as usize, 0);
 
                 let read_end = read_index + index_data_size;
+
+                // Collect into an aligned Vec<u32>
+                let tmp_indices: Vec<u32> =
+                    bytemuck::pod_collect_to_vec(&bytes[read_index..read_end]);
+
                 desc.indices[write_start..write_start + index_count as usize]
-                    .copy_from_slice(bytemuck::cast_slice(&bytes[read_index..read_end]));
+                    .copy_from_slice(&tmp_indices);
+
                 read_index += index_data_size;
             }
         }
