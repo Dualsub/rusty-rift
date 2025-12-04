@@ -1,12 +1,12 @@
+use shared::math::*;
 use std::sync::Arc;
-use wgpu::{BufferUsages, util::DeviceExt};
+use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
     BufferDesc, MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture,
     buffer::Buffer,
     material::{MaterialInstance, MaterialInstanceDesc, MaterialPipelineDesc},
-    mesh::MeshLoadDesc,
     texture::TextureDesc,
 };
 
@@ -14,8 +14,8 @@ use crate::renderer::{
 // This is so we can store this in a buffer
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UniformBufferData {
-    view_matrix: [[f32; 4]; 4],
-    projection_matrix: [[f32; 4]; 4],
+    view_matrix: Mat4Data,
+    projection_matrix: Mat4Data,
 }
 
 pub struct Renderer {
@@ -26,7 +26,7 @@ pub struct Renderer {
     pub uniform_buffer: Buffer,
     pub uniform_data: UniformBufferData,
     pub instance_buffer: Buffer,
-    pub instance_data: Vec<[f32; 16]>,
+    pub instance_data: Vec<Mat4Data>,
     // Temporary for dev
     pub material_pipeline: MaterialPipeline,
     pub material_instance: MaterialInstance,
@@ -81,14 +81,14 @@ impl Renderer {
         const INSTANCE_COUNT: usize = 256;
         const DISTANCE: f32 = 256.0;
 
-        let mut instance_data: Vec<[f32; 16]> = Default::default();
+        let mut instance_data: Vec<Mat4Data> = Default::default();
         instance_data.reserve(INSTANCE_COUNT);
         for i in 0..INSTANCE_COUNT {
             let xi = (i as i32 / 8i32) - 4;
             let zi = (i as i32 % 8i32) - 4;
 
             instance_data.push(
-                glam::Mat4::from_translation(glam::Vec3 {
+                Mat4::from_translation(Vec3 {
                     x: (xi as f32 * DISTANCE),
                     y: 0.0,
                     z: (zi as f32 * DISTANCE),
@@ -124,7 +124,7 @@ impl Renderer {
             layout_entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -198,8 +198,8 @@ impl Renderer {
             _depth_sampler: depth_sampler,
             uniform_buffer,
             uniform_data: UniformBufferData {
-                view_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
-                projection_matrix: glam::Mat4::IDENTITY.to_cols_array_2d(),
+                view_matrix: Mat4::IDENTITY.to_data(),
+                projection_matrix: Mat4::IDENTITY.to_data(),
             },
             instance_data,
             instance_buffer,
@@ -233,20 +233,20 @@ impl Renderer {
         }
 
         // Update data
-        let projection_matrix = glam::Mat4::perspective_rh(
+        let projection_matrix = Mat4::perspective_rh(
             f32::to_radians(60.0),
             render_device.config.width as f32 / render_device.config.height as f32,
             0.1,
             2000.0,
         );
-        self.uniform_data.projection_matrix = projection_matrix.to_cols_array_2d();
+        self.uniform_data.projection_matrix = projection_matrix.to_data();
 
-        let view_matrix = glam::Mat4::from_translation(glam::Vec3 {
+        let view_matrix = Mat4::from_translation(Vec3 {
             x: 0.0,
             y: -200.0,
             z: -1200.0,
         });
-        self.uniform_data.view_matrix = view_matrix.to_cols_array_2d();
+        self.uniform_data.view_matrix = view_matrix.to_data();
 
         render_device.write_buffer(
             &self.uniform_buffer,
@@ -255,8 +255,8 @@ impl Renderer {
         );
 
         for i in 0..self.instance_data.len() {
-            let mut model_matrix = glam::Mat4::from_cols_array(&self.instance_data[i]);
-            model_matrix *= glam::Mat4::from_rotation_y(f32::to_radians(1.0));
+            let mut model_matrix = Mat4::from_cols_array(&self.instance_data[i]);
+            model_matrix *= Mat4::from_rotation_y(f32::to_radians(1.0));
             self.instance_data[i] = model_matrix.to_cols_array();
         }
 
