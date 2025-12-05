@@ -1,11 +1,12 @@
-use shared::math::*;
+use shared::{math::*, transform::Transform};
+use std::ops::Range;
 use std::sync::Arc;
 use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
-    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipelineDesc, RenderDevice, Resource,
-    ResourceId, ResourcePool, ResourcePoolType, StaticMeshVertex, Texture, TextureDesc,
+    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderDevice,
+    Resource, ResourceId, ResourcePool, ResourcePoolType, StaticMeshVertex, Texture, TextureDesc,
 };
 
 #[repr(C)]
@@ -24,12 +25,20 @@ struct InstanceData {
     model_matrix: Mat4Data,
 }
 
+pub struct RenderBatch {
+    pub material_instance_id: ResourceId,
+    pub mesh_id: ResourceId,
+    pub instance_range: Range<u32>,
+}
+
 pub struct Renderer {
     render_device: RenderDevice,
     resource_pool: ResourcePool,
     depth_buffer: Texture,
     _depth_sampler: wgpu::Sampler,
     _default_sampler: wgpu::Sampler,
+
+    camera_transform: Transform,
     uniform_buffer: Buffer,
     uniform_data: UniformBufferData,
     instance_buffer: Buffer,
@@ -220,6 +229,15 @@ impl Renderer {
             _default_sampler: default_sampler,
             depth_buffer,
             _depth_sampler: depth_sampler,
+            camera_transform: Transform {
+                position: Vec3 {
+                    x: 0.0,
+                    y: 400.0,
+                    z: 0.0,
+                },
+                rotation: Quat::from_rotation_x(f32::to_radians(-30.0)),
+                ..Default::default()
+            },
             uniform_buffer,
             uniform_data: UniformBufferData {
                 view_matrix: Mat4::IDENTITY.to_data(),
@@ -253,33 +271,29 @@ impl Renderer {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let render_device = &mut self.render_device;
-
-        if !render_device.is_surface_configured {
+        if !self.render_device.is_surface_configured {
             return Ok(());
         }
 
-        // Update data
-        let camera_position = Vec3 {
-            x: 0.0,
-            y: 200.0,
-            z: 600.0,
-        };
-
         let projection_matrix = Mat4::perspective_rh(
-            f32::to_radians(60.0),
-            render_device.config.width as f32 / render_device.config.height as f32,
+            f32::to_radians(40.0),
+            self.render_device.config.width as f32 / self.render_device.config.height as f32,
             0.1,
             2000.0,
         );
         self.uniform_data.projection_matrix = projection_matrix.to_data();
 
-        let view_matrix = Mat4::from_translation(camera_position).inverse();
+        self.camera_transform.rotation *= Quat::from_rotation_y(f32::to_radians(0.1));
+        let view_matrix = self.camera_transform.to_matrix().inverse();
         self.uniform_data.view_matrix = view_matrix.to_data();
-        self.uniform_data.camera_position =
-            [camera_position.x, camera_position.y, camera_position.z, 0.0];
+        self.uniform_data.camera_position = [
+            self.camera_transform.position.x,
+            self.camera_transform.position.y,
+            self.camera_transform.position.z,
+            0.0,
+        ];
 
-        render_device.write_buffer(
+        self.render_device.write_buffer(
             &self.uniform_buffer,
             bytemuck::bytes_of(&self.uniform_data),
             0,
@@ -287,24 +301,24 @@ impl Renderer {
 
         for i in 0..self.instance_data.len() {
             let mut model_matrix = Mat4::from_cols_array(&self.instance_data[i].model_matrix);
-            model_matrix *= Mat4::from_rotation_y(f32::to_radians(0.0));
+            model_matrix *= Mat4::from_rotation_y(f32::to_radians(1.0));
             self.instance_data[i].model_matrix = model_matrix.to_data();
         }
 
-        render_device.write_buffer(
+        self.render_device.write_buffer(
             &self.instance_buffer,
             bytemuck::cast_slice(self.instance_data.as_slice()),
             0,
         );
 
         // Render
-        let output = render_device.surface.get_current_texture()?;
+        let output = self.render_device.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder =
-            render_device
+            self.render_device
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Render Encoder"),
@@ -339,33 +353,57 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            let material_pipeline = self
-                .resource_pool
-                .get_material_pipeline(self.material_pipeline_id)
-                .unwrap();
+            let batch = RenderBatch {
+                mesh_id: self.mesh_id,
+                material_instance_id: self.material_instance_id,
+                instance_range: 0..self.instance_data.len() as u32,
+            };
 
-            let material_instance = self
-                .resource_pool
-                .get_material_instance(self.material_instance_id)
-                .unwrap();
-
-            let mesh = self.resource_pool.get_mesh(self.mesh_id).unwrap();
-
-            render_pass.set_pipeline(&material_pipeline.pipeline);
-            render_pass.set_bind_group(0, &material_instance.bindgroup, &[]);
-            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
-            render_pass.set_index_buffer(
-                mesh.index_buffer.buffer.slice(..),
-                wgpu::IndexFormat::Uint32,
-            );
-            render_pass.draw_indexed(0..mesh.index_count, 0, 0..self.instance_data.len() as u32);
+            self.render_batches(&mut render_pass, self.material_pipeline_id, &[batch]);
         }
 
-        render_device
+        self.render_device
             .queue
             .submit(std::iter::once(encoder.finish()));
         output.present();
 
         Ok(())
+    }
+
+    fn render_batches(
+        &self,
+        render_pass: &mut wgpu::RenderPass,
+        material_pipeline_id: ResourceId,
+        batches: &[RenderBatch],
+    ) {
+        let material_pipeline = self
+            .resource_pool
+            .get_material_pipeline(material_pipeline_id)
+            .unwrap();
+
+        render_pass.set_pipeline(&material_pipeline.pipeline);
+        for batch in batches {
+            let material_instance = self
+                .resource_pool
+                .get_material_instance(batch.material_instance_id)
+                .unwrap(); // Could add a default material here maybe
+
+            render_pass.set_bind_group(0, &material_instance.bindgroup, &[]);
+
+            let mesh = self.resource_pool.get_mesh(batch.mesh_id).unwrap();
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
+            render_pass.set_index_buffer(
+                mesh.index_buffer.buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+
+            // We can clone the range, it is very small so it is fine
+            render_pass.draw_indexed(0..mesh.index_count, 0, batch.instance_range.clone());
+        }
+    }
+
+    pub fn set_camera_position_and_orientation(&mut self, position: Vec3, orientation: Quat) {
+        self.camera_transform.position = position;
+        self.camera_transform.rotation = orientation;
     }
 }
