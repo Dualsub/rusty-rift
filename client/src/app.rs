@@ -10,18 +10,25 @@ use winit::{
     window::Window,
 };
 
+use crate::game::Game;
 use crate::renderer::Renderer;
 
 pub struct State {
     pub window: Arc<Window>,
     pub renderer: Renderer,
+    pub game: Game,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let renderer = Renderer::new(&window).await?;
+        let game = Game::new();
 
-        Ok(Self { window, renderer })
+        Ok(Self {
+            window,
+            renderer,
+            game,
+        })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -31,6 +38,7 @@ impl State {
     pub fn update(&mut self) {}
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.game.render(&mut self.renderer);
         self.window.request_redraw();
         self.renderer.render()
     }
