@@ -74,7 +74,7 @@ pub fn load(path: &str, output: &str) -> std::io::Result<()> {
         for face in faces {
             assert_eq!(face.num_indices(), 3);
             for index in face.indices() {
-                let index_value = (*index + total_vertex_count);
+                let index_value = *index + total_vertex_count;
                 file.write_all(&index_value.to_le_bytes())?;
             }
         }
