@@ -4,15 +4,13 @@ use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
-    BufferDesc, MaterialPipeline, RenderDevice, StaticMesh, StaticMeshVertex, Texture,
-    buffer::Buffer,
-    material::{MaterialInstance, MaterialInstanceDesc, MaterialPipelineDesc},
-    texture::TextureDesc,
+    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipelineDesc, RenderDevice, Resource,
+    ResourceId, ResourcePool, ResourcePoolType, StaticMeshVertex, Texture, TextureDesc,
 };
 
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct UniformBufferData {
+struct UniformBufferData {
     view_matrix: Mat4Data,
     projection_matrix: Mat4Data,
     camera_position: Vec4Data,
@@ -22,24 +20,25 @@ pub struct UniformBufferData {
 
 #[repr(C)]
 #[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct InstanceData {
+struct InstanceData {
     model_matrix: Mat4Data,
 }
 
 pub struct Renderer {
-    pub render_device: RenderDevice,
-    pub depth_buffer: Texture,
-    pub _depth_sampler: wgpu::Sampler,
-    pub _default_sampler: wgpu::Sampler,
-    pub uniform_buffer: Buffer,
-    pub uniform_data: UniformBufferData,
-    pub instance_buffer: Buffer,
-    pub instance_data: Vec<InstanceData>,
+    render_device: RenderDevice,
+    resource_pool: ResourcePool,
+    depth_buffer: Texture,
+    _depth_sampler: wgpu::Sampler,
+    _default_sampler: wgpu::Sampler,
+    uniform_buffer: Buffer,
+    uniform_data: UniformBufferData,
+    instance_buffer: Buffer,
+    instance_data: Vec<InstanceData>,
     // Temporary for dev
-    pub material_pipeline: MaterialPipeline,
-    pub material_instance: MaterialInstance,
-    pub mesh: StaticMesh,
-    pub _texture: Texture,
+    material_pipeline_id: ResourceId,
+    material_instance_id: ResourceId,
+    mesh_id: ResourceId,
+    _texture_id: ResourceId,
 }
 
 impl Renderer {
@@ -56,6 +55,7 @@ impl Renderer {
 
     pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
         let render_device = RenderDevice::new(&window).await?;
+        let mut resource_pool = ResourcePool::new();
 
         let default_sampler = render_device
             .device
@@ -199,8 +199,24 @@ impl Renderer {
             },
         );
 
+        let material_pipeline_id = resource_pool.add_resource(
+            Resource::MaterialPipeline(material_pipeline),
+            ResourcePoolType::Scene,
+        );
+
+        let material_instance_id = resource_pool.add_resource(
+            Resource::MaterialInstance(material_instance),
+            ResourcePoolType::Scene,
+        );
+
+        let texture_id =
+            resource_pool.add_resource(Resource::Texture(texture), ResourcePoolType::Scene);
+
+        let mesh_id = resource_pool.add_resource(Resource::Mesh(mesh), ResourcePoolType::Scene);
+
         Ok(Renderer {
             render_device,
+            resource_pool,
             _default_sampler: default_sampler,
             depth_buffer,
             _depth_sampler: depth_sampler,
@@ -214,10 +230,10 @@ impl Renderer {
             },
             instance_data,
             instance_buffer,
-            material_pipeline,
-            material_instance,
-            mesh,
-            _texture: texture,
+            material_pipeline_id,
+            material_instance_id,
+            mesh_id,
+            _texture_id: texture_id,
         })
     }
 
@@ -323,18 +339,26 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.material_pipeline.pipeline);
-            render_pass.set_bind_group(0, &self.material_instance.bindgroup, &[]);
-            render_pass.set_vertex_buffer(0, self.mesh.vertex_buffer.buffer.slice(..));
+            let material_pipeline = self
+                .resource_pool
+                .get_material_pipeline(self.material_pipeline_id)
+                .unwrap();
+
+            let material_instance = self
+                .resource_pool
+                .get_material_instance(self.material_instance_id)
+                .unwrap();
+
+            let mesh = self.resource_pool.get_mesh(self.mesh_id).unwrap();
+
+            render_pass.set_pipeline(&material_pipeline.pipeline);
+            render_pass.set_bind_group(0, &material_instance.bindgroup, &[]);
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
             render_pass.set_index_buffer(
-                self.mesh.index_buffer.buffer.slice(..),
+                mesh.index_buffer.buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            render_pass.draw_indexed(
-                0..self.mesh.index_count,
-                0,
-                0..self.instance_data.len() as u32,
-            );
+            render_pass.draw_indexed(0..mesh.index_count, 0, 0..self.instance_data.len() as u32);
         }
 
         render_device
