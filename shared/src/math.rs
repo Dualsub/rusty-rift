@@ -1,4 +1,4 @@
-pub use glam::{Mat4, Vec2, Vec3, Vec4};
+pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub type Mat4Data = [f32; 16];
 pub type Vec4Data = [f32; 4];
