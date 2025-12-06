@@ -1,12 +1,13 @@
 use shared::{math::*, transform::Transform};
 use std::ops::Range;
 use std::sync::Arc;
-use wgpu::BufferUsages;
+use wgpu::{BindGroupDescriptor, BindGroupLayoutDescriptor, BufferUsages};
 use winit::window::Window;
 
 use crate::renderer::{
-    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderDevice,
-    Resource, ResourceId, ResourcePool, ResourcePoolType, StaticMeshVertex, Texture, TextureDesc,
+    Buffer, BufferDesc, MaterialInstance, MaterialInstanceDesc, MaterialPipeline,
+    MaterialPipelineDesc, RenderData, RenderDevice, ResourceHandle, ResourcePool,
+    StaticInstanceData, StaticMeshVertex, Texture, TextureDesc,
 };
 
 #[repr(C)]
@@ -21,26 +22,16 @@ struct UniformBufferData {
     light_color: Vec4Data,
 }
 
-#[repr(C)]
-#[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceData {
-    model_matrix: Mat4Data,
-}
-
-struct RenderJob {
-    transform: Mat4,
-    material: ResourceId,
-    mesh: ResourceId,
-}
-
-struct FrameData<'a> {
-    static_mesh_batches: &'a [RenderBatch],
-}
-
-struct RenderBatch {
-    pub material_instance_id: ResourceId,
-    pub mesh_id: ResourceId,
+pub struct RenderBatch {
+    pub material_instance: ResourceHandle,
+    pub mesh: ResourceHandle,
     pub instance_range: Range<u32>,
+}
+
+// Generated before each draw
+pub struct DrawData {
+    pub static_batches: Vec<RenderBatch>,
+    pub static_instances: Vec<StaticInstanceData>,
 }
 
 pub struct Renderer {
@@ -49,26 +40,29 @@ pub struct Renderer {
     depth_buffer: Texture,
     _depth_sampler: wgpu::Sampler,
     _default_sampler: wgpu::Sampler,
+
+    scene_bind_group_layout: wgpu::BindGroupLayout,
+    scene_bind_group: wgpu::BindGroup,
+
     shadow_map: Texture,
-    shadow_material_pipeline_id: ResourceId,
-    shadow_material_instance_id: ResourceId,
+    shadow_material_pipeline: MaterialPipeline,
+
+    static_material_pipeline: MaterialPipeline,
 
     camera_transform: Transform,
     uniform_buffer: Buffer,
     uniform_data: UniformBufferData,
-    instance_buffer: Buffer,
-    instance_data: Vec<InstanceData>,
-    // Temporary for dev
-    material_pipeline_id: ResourceId,
-    material_instance_id: ResourceId,
-    mesh_id: ResourceId,
-    ground_mesh_id: ResourceId,
-    _texture_id: ResourceId,
+
+    static_instance_buffer: Buffer,
+
+    render_data: RenderData,
 }
 
 impl Renderer {
     const SHADOW_MAP_WIDTH: u32 = 2048;
     const SHADOW_MAP_HEIGHT: u32 = 2048;
+
+    const STATIC_INSTANCE_COUNT: usize = 512;
 
     fn create_depth_buffer(render_device: &RenderDevice) -> Texture {
         render_device.create_texture(&TextureDesc {
@@ -83,7 +77,7 @@ impl Renderer {
 
     pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
         let render_device = RenderDevice::new(&window).await?;
-        let mut resource_pool = ResourcePool::new();
+        let resource_pool = ResourcePool::new();
 
         let default_sampler = render_device
             .device
@@ -125,30 +119,8 @@ impl Renderer {
             ..Default::default()
         });
 
-        const INSTANCE_COUNT: usize = 16;
-        const DISTANCE: f32 = 256.0;
-
-        let mut instance_data: Vec<InstanceData> = Default::default();
-        instance_data.reserve(INSTANCE_COUNT);
-        for i in 0..INSTANCE_COUNT {
-            let xi = i as i32 / 4i32;
-            let zi = i as i32 % 4i32;
-
-            let position = Vec3 {
-                x: (xi as f32 * DISTANCE),
-                y: 0.0,
-                z: (zi as f32 * DISTANCE),
-            };
-
-            log::log!(log::Level::Info, "{:?}", position);
-
-            instance_data.push(InstanceData {
-                model_matrix: Mat4::from_translation(position).to_data(),
-            });
-        }
-
-        let instance_buffer = render_device.create_buffer(&BufferDesc {
-            size: INSTANCE_COUNT * 16 * std::mem::size_of::<f32>(),
+        let static_instance_buffer = render_device.create_buffer(&BufferDesc {
+            size: Self::STATIC_INSTANCE_COUNT * std::mem::size_of::<StaticInstanceData>(),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
@@ -157,60 +129,50 @@ impl Renderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout = [
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Depth,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 5,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                count: None,
-            },
-        ];
+        let scene_bind_group_layout =
+            render_device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Depth,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                            count: None,
+                        },
+                    ],
+                });
 
         let shadow_shader =
             render_device
@@ -226,27 +188,11 @@ impl Renderer {
             render_device.create_material_pipeline(&MaterialPipelineDesc {
                 vertex_shader: &shadow_shader,
                 fragment_shader: None,
-                bind_group_layouts: &[],
-                layout_entries: &bind_group_layout[0..2], // We only need the first two bindings
+                bind_group_layouts: &[&scene_bind_group_layout],
+                layout_entries: &[], // We only need the first two bindings
                 vertex_layout: &StaticMeshVertex::desc(),
                 push_contant_ranges: &[],
             });
-
-        let shadow_material_instance = render_device.create_material_instance(
-            &shadow_material_pipeline,
-            &MaterialInstanceDesc {
-                entires: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: instance_buffer.buffer.as_entire_binding(),
-                    },
-                ],
-            },
-        );
 
         let shader = render_device
             .device
@@ -257,14 +203,32 @@ impl Renderer {
                 ),
             });
 
-        let material_pipeline = render_device.create_material_pipeline(&MaterialPipelineDesc {
-            bind_group_layouts: &[],
-            push_contant_ranges: &[],
-            vertex_shader: &shader,
-            fragment_shader: Some(&shader),
-            layout_entries: &bind_group_layout,
-            vertex_layout: &StaticMeshVertex::desc(),
-        });
+        let static_material_pipeline =
+            render_device.create_material_pipeline(&MaterialPipelineDesc {
+                bind_group_layouts: &[&scene_bind_group_layout],
+                push_contant_ranges: &[],
+                vertex_shader: &shader,
+                fragment_shader: Some(&shader),
+                layout_entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                vertex_layout: &StaticMeshVertex::desc(),
+            });
 
         let mesh = render_device.load_mesh(include_bytes!("../../../assets/models/test.dat"))?;
         let ground_mesh =
@@ -273,64 +237,46 @@ impl Renderer {
         let texture =
             render_device.load_texture(include_bytes!("../../../assets/textures/grid.dat"))?;
 
-        let material_instance = render_device.create_material_instance(
-            &material_pipeline,
-            &MaterialInstanceDesc {
-                entires: &[
+        let scene_bind_group = render_device
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &scene_bind_group_layout,
+                entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
                         resource: uniform_buffer.buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: instance_buffer.buffer.as_entire_binding(),
+                        resource: static_instance_buffer.buffer.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&default_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
                         resource: wgpu::BindingResource::TextureView(&shadow_map.view),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 5,
+                        binding: 3,
                         resource: wgpu::BindingResource::Sampler(&depth_sampler),
+                    },
+                ],
+            });
+
+        let material_instance = render_device.create_material_instance(
+            &static_material_pipeline,
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&default_sampler),
                     },
                 ],
             },
         );
-
-        let shadow_material_pipeline_id = resource_pool.add_resource(
-            Resource::MaterialPipeline(shadow_material_pipeline),
-            ResourcePoolType::Scene,
-        );
-
-        let shadow_material_instance_id = resource_pool.add_resource(
-            Resource::MaterialInstance(shadow_material_instance),
-            ResourcePoolType::Scene,
-        );
-
-        let material_pipeline_id = resource_pool.add_resource(
-            Resource::MaterialPipeline(material_pipeline),
-            ResourcePoolType::Scene,
-        );
-
-        let material_instance_id = resource_pool.add_resource(
-            Resource::MaterialInstance(material_instance),
-            ResourcePoolType::Scene,
-        );
-
-        let texture_id =
-            resource_pool.add_resource(Resource::Texture(texture), ResourcePoolType::Scene);
-
-        let mesh_id = resource_pool.add_resource(Resource::Mesh(mesh), ResourcePoolType::Scene);
-        let ground_mesh_id =
-            resource_pool.add_resource(Resource::Mesh(ground_mesh), ResourcePoolType::Scene);
 
         Ok(Renderer {
             render_device,
@@ -338,9 +284,10 @@ impl Renderer {
             _default_sampler: default_sampler,
             depth_buffer,
             _depth_sampler: depth_sampler,
+            scene_bind_group_layout,
+            scene_bind_group,
             shadow_map,
-            shadow_material_pipeline_id,
-            shadow_material_instance_id,
+            shadow_material_pipeline,
             camera_transform: Transform {
                 position: Vec3 {
                     x: 0.0,
@@ -350,6 +297,7 @@ impl Renderer {
                 rotation: Quat::from_rotation_x(f32::to_radians(-30.0)),
                 ..Default::default()
             },
+            render_data: RenderData::new(),
             uniform_buffer,
             uniform_data: UniformBufferData {
                 view_matrix: Mat4::IDENTITY.to_data(),
@@ -359,13 +307,8 @@ impl Renderer {
                 light_direction: [0.0, -1.0, -1.0, 0.0],
                 light_color: [1.0, 1.0, 1.0, 1.0],
             },
-            instance_data,
-            instance_buffer,
-            material_pipeline_id,
-            material_instance_id,
-            mesh_id,
-            ground_mesh_id,
-            _texture_id: texture_id,
+            static_instance_buffer,
+            static_material_pipeline,
         })
     }
 
@@ -384,7 +327,61 @@ impl Renderer {
         }
     }
 
-    fn draw_frame(&self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        if !self.render_device.is_surface_configured {
+            return Ok(());
+        }
+
+        self.upload_uniform_buffer();
+
+        let draw_data = self.render_data.build_draw_data();
+
+        self.upload_draw_data(&draw_data);
+
+        self.draw_frame(&draw_data)
+    }
+
+    fn upload_uniform_buffer(&mut self) {
+        let projection_matrix = Mat4::perspective_rh(
+            f32::to_radians(40.0),
+            self.render_device.config.width as f32 / self.render_device.config.height as f32,
+            1.0,
+            2000.0,
+        );
+        self.uniform_data.projection_matrix = projection_matrix.to_data();
+
+        self.camera_transform.rotation *= Quat::from_rotation_y(f32::to_radians(0.1));
+        let view_matrix = self.camera_transform.to_matrix().inverse();
+        self.uniform_data.view_matrix = view_matrix.to_data();
+        self.uniform_data.camera_position = [
+            self.camera_transform.position.x,
+            self.camera_transform.position.y,
+            self.camera_transform.position.z,
+            0.0,
+        ];
+        self.uniform_data.light_matrix = Self::compute_directional_light_vp(
+            view_matrix,
+            projection_matrix,
+            Vec3::from_slice(&self.uniform_data.light_direction),
+        )
+        .to_data();
+
+        self.render_device.write_buffer(
+            &self.uniform_buffer,
+            bytemuck::bytes_of(&self.uniform_data),
+            0,
+        );
+    }
+
+    fn upload_draw_data(&mut self, draw_data: &DrawData) {
+        self.render_device.write_buffer(
+            &self.static_instance_buffer,
+            bytemuck::cast_slice(draw_data.static_instances.as_slice()),
+            0,
+        );
+    }
+
+    fn draw_frame(&self, draw_data: &DrawData) -> Result<(), wgpu::SurfaceError> {
         let output = self.render_device.surface.get_current_texture()?;
         let view = output
             .texture
@@ -413,24 +410,10 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            let batches = [
-                RenderBatch {
-                    mesh_id: self.mesh_id,
-                    material_instance_id: self.shadow_material_instance_id,
-                    instance_range: 0..(self.instance_data.len() - 1) as u32,
-                },
-                RenderBatch {
-                    mesh_id: self.ground_mesh_id,
-                    material_instance_id: self.shadow_material_instance_id,
-                    instance_range: (self.instance_data.len() - 1) as u32
-                        ..self.instance_data.len() as u32,
-                },
-            ];
-
             self.render_batches(
                 &mut render_pass,
-                self.shadow_material_pipeline_id,
-                batches.as_slice(),
+                &self.shadow_material_pipeline,
+                &draw_data.static_batches,
             );
         }
 
@@ -463,24 +446,11 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            let batches = [
-                RenderBatch {
-                    mesh_id: self.mesh_id,
-                    material_instance_id: self.material_instance_id,
-                    instance_range: 0..(self.instance_data.len() - 1) as u32,
-                },
-                RenderBatch {
-                    mesh_id: self.ground_mesh_id,
-                    material_instance_id: self.material_instance_id,
-                    instance_range: (self.instance_data.len() - 1) as u32
-                        ..self.instance_data.len() as u32,
-                },
-            ];
-
             self.render_batches(
                 &mut render_pass,
-                self.material_pipeline_id,
-                batches.as_slice(),
+                &self.static_material_pipeline,
+                &draw_data.static_batches,
+                None,
             );
         }
 
@@ -492,71 +462,24 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        if !self.render_device.is_surface_configured {
-            return Ok(());
-        }
-
-        let projection_matrix = Mat4::perspective_rh(
-            f32::to_radians(40.0),
-            self.render_device.config.width as f32 / self.render_device.config.height as f32,
-            1.0,
-            2000.0,
-        );
-        self.uniform_data.projection_matrix = projection_matrix.to_data();
-
-        self.camera_transform.rotation *= Quat::from_rotation_y(f32::to_radians(0.1));
-        let view_matrix = self.camera_transform.to_matrix().inverse();
-        self.uniform_data.view_matrix = view_matrix.to_data();
-        self.uniform_data.camera_position = [
-            self.camera_transform.position.x,
-            self.camera_transform.position.y,
-            self.camera_transform.position.z,
-            0.0,
-        ];
-        self.uniform_data.light_matrix = Self::compute_directional_light_vp(
-            view_matrix,
-            projection_matrix,
-            Vec3::from_slice(&self.uniform_data.light_direction),
-        )
-        .to_data();
-
-        self.render_device.write_buffer(
-            &self.uniform_buffer,
-            bytemuck::bytes_of(&self.uniform_data),
-            0,
-        );
-
-        self.render_device.write_buffer(
-            &self.instance_buffer,
-            bytemuck::cast_slice(self.instance_data.as_slice()),
-            0,
-        );
-
-        self.draw_frame()
-    }
-
     fn render_batches(
         &self,
         render_pass: &mut wgpu::RenderPass,
-        material_pipeline_id: ResourceId,
+        material_pipeline: &MaterialPipeline,
         batches: &[RenderBatch],
+        override_material_instance: Option<&MaterialInstance>,
     ) {
-        let material_pipeline = self
-            .resource_pool
-            .get_material_pipeline(material_pipeline_id)
-            .unwrap();
-
         render_pass.set_pipeline(&material_pipeline.pipeline);
         for batch in batches {
-            let material_instance = self
-                .resource_pool
-                .get_material_instance(batch.material_instance_id)
-                .unwrap(); // Could add a default material here maybe
+            let material_instance = override_material_instance.unwrap_or(
+                self.resource_pool
+                    .get_material_instance(batch.material_instance)
+                    .unwrap(), // Could add a default material here maybe
+            );
 
             render_pass.set_bind_group(0, &material_instance.bindgroup, &[]);
 
-            let mesh = self.resource_pool.get_mesh(batch.mesh_id).unwrap();
+            let mesh = self.resource_pool.get_mesh(batch.mesh).unwrap();
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
             render_pass.set_index_buffer(
                 mesh.index_buffer.buffer.slice(..),

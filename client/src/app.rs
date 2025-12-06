@@ -29,8 +29,9 @@ fn get_time() -> f64 {
 
 impl State {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
-        let renderer = Renderer::new(&window).await?;
-        let game = Game::new();
+        let mut renderer = Renderer::new(&window).await?;
+        let mut game = Game::new();
+        game.load_resources(&mut renderer);
 
         Ok(Self {
             window,

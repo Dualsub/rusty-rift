@@ -1,0 +1,1 @@
+call wasm-pack build client --target web

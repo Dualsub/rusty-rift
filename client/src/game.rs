@@ -15,8 +15,12 @@ impl Game {
         self.turn += 1.0 * dt;
     }
 
+    pub fn load_resources(&mut self, renderer: &mut Renderer) {
+        renderer.load_mesh();
+    }
+
     pub fn render(&self, renderer: &mut Renderer) {
-        let camera_target = glam::vec3(768.0, 0.0, 512.0);
+        let camera_target = glam::vec3(0.0, 0.0, 0.0);
 
         const CAMERA_RADIUS: f32 = 1200.0;
         const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
