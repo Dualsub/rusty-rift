@@ -17,6 +17,14 @@ pub struct State {
     pub window: Arc<Window>,
     pub renderer: Renderer,
     pub game: Game,
+
+    pub previous_time: f64,
+}
+
+fn get_time() -> f64 {
+    let window = wgpu::web_sys::window().unwrap_throw();
+    let performance = window.performance().unwrap_throw();
+    performance.now() * 0.001
 }
 
 impl State {
@@ -28,6 +36,7 @@ impl State {
             window,
             renderer,
             game,
+            previous_time: get_time(),
         })
     }
 
@@ -35,7 +44,9 @@ impl State {
         self.renderer.resize(width, height);
     }
 
-    pub fn update(&mut self) {}
+    pub fn update(&mut self, dt: f32) {
+        self.game.update(dt);
+    }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.game.render(&mut self.renderer);
@@ -139,7 +150,12 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                state.update();
+                let now = get_time();
+                let dt = (now - state.previous_time) as f32;
+                state.previous_time = now;
+
+                state.update(dt);
+
                 match state.render() {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
