@@ -34,4 +34,5 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Window",
     "Element",
+    "Performance",
 ]}

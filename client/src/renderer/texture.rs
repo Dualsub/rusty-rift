@@ -12,6 +12,8 @@ pub struct TextureDesc {
     pub format: Option<wgpu::TextureFormat>,
     pub pixels: Vec<u8>, // If empty, othing will be uploaded
     pub usage: wgpu::TextureUsages,
+    pub view_dimension: wgpu::TextureViewDimension,
+    pub aspect: wgpu::TextureAspect,
 }
 
 impl Default for TextureDesc {
@@ -26,6 +28,8 @@ impl Default for TextureDesc {
             pixels: vec![],
             format: None,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_dimension: wgpu::TextureViewDimension::D2Array,
+            aspect: wgpu::TextureAspect::All,
         }
     }
 }
@@ -185,10 +189,10 @@ impl RenderDevice {
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             label: None,
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            dimension: Some(desc.view_dimension),
             format: Some(format),
             array_layer_count: Some(desc.layer_count),
-            aspect: wgpu::TextureAspect::All,
+            aspect: desc.aspect,
             base_array_layer: 0,
             base_mip_level: 0,
             mip_level_count: Some(desc.mip_level_count),

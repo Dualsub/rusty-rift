@@ -2,7 +2,7 @@ use crate::renderer::RenderDevice;
 
 pub struct MaterialPipelineDesc<'a> {
     pub vertex_shader: &'a wgpu::ShaderModule,
-    pub fragment_shader: &'a wgpu::ShaderModule,
+    pub fragment_shader: Option<&'a wgpu::ShaderModule>,
     pub bind_group_layouts: &'a [&'a wgpu::BindGroupLayout],
     pub layout_entries: &'a [wgpu::BindGroupLayoutEntry],
     pub vertex_layout: &'a wgpu::VertexBufferLayout<'static>,
@@ -37,6 +37,12 @@ impl RenderDevice {
                 push_constant_ranges: desc.push_contant_ranges,
             });
 
+        let default_target = [Some(wgpu::ColorTargetState {
+            format: self.config.format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+
         let pipeline = self
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -48,16 +54,15 @@ impl RenderDevice {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     buffers: &[desc.vertex_layout.clone()],
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: desc.fragment_shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: self.config.format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
+                fragment: match desc.fragment_shader {
+                    Some(fragment_shader) => Some(wgpu::FragmentState {
+                        module: fragment_shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &default_target,
+                    }),
+                    None => None,
+                },
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
