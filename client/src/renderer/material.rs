@@ -12,22 +12,27 @@ pub struct MaterialPipelineDesc<'a> {
 pub struct MaterialPipeline {
     pub _pipeline_layout: wgpu::PipelineLayout,
     pub pipeline: wgpu::RenderPipeline,
-    pub bindgroup_layout: wgpu::BindGroupLayout,
+    pub bindgroup_layout: Option<wgpu::BindGroupLayout>,
 }
 
 impl MaterialPipeline {}
 
 impl RenderDevice {
     pub fn create_material_pipeline(&self, desc: &MaterialPipelineDesc) -> MaterialPipeline {
-        let bindgroup_layout =
-            self.device
+        let mut bind_group_layouts = desc.bind_group_layouts.to_vec();
+        let mut extra_bind_group_layout: Option<wgpu::BindGroupLayout> = None;
+
+        if !desc.layout_entries.is_empty() {
+            let layout = self
+                .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: None,
                     entries: desc.layout_entries,
                 });
 
-        let mut bind_group_layouts = desc.bind_group_layouts.to_vec();
-        bind_group_layouts.push(&bindgroup_layout);
+            extra_bind_group_layout = Some(layout.clone());
+            bind_group_layouts.push(extra_bind_group_layout.as_ref().unwrap());
+        }
 
         let pipeline_layout = self
             .device
@@ -91,7 +96,7 @@ impl RenderDevice {
         MaterialPipeline {
             _pipeline_layout: pipeline_layout,
             pipeline,
-            bindgroup_layout,
+            bindgroup_layout: extra_bind_group_layout,
         }
     }
 }
@@ -101,7 +106,7 @@ pub struct MaterialInstanceDesc<'a> {
 }
 
 pub struct MaterialInstance {
-    pub bindgroup: wgpu::BindGroup,
+    pub bind_group: wgpu::BindGroup,
 }
 
 impl RenderDevice {
@@ -112,10 +117,12 @@ impl RenderDevice {
     ) -> MaterialInstance {
         let bindgroup = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &pipeline.bindgroup_layout,
+            layout: &pipeline.bindgroup_layout.as_ref().unwrap(), // We should not be creating a material instance of no layout
             entries: desc.entires,
         });
 
-        MaterialInstance { bindgroup }
+        MaterialInstance {
+            bind_group: bindgroup,
+        }
     }
 }

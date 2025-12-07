@@ -17,4 +17,4 @@ pub use instance_data::StaticInstanceData;
 pub mod resources;
 pub use resources::{Resource, ResourceHandle, ResourcePool};
 pub mod render_data;
-pub use render_data::RenderData;
+pub use render_data::{RenderData, StaticRenderJob};

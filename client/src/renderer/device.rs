@@ -55,6 +55,9 @@ impl RenderDevice {
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_capabilities.formats[0]);
+
+        log::log!(log::Level::Info, "Surface format: {:?}", surface_format);
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,

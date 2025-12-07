@@ -131,6 +131,9 @@ impl RenderDevice {
         let format = desc
             .format
             .unwrap_or(desc.wgpu_format().expect("Unknown format"));
+
+        log::log!(log::Level::Info, "Texture format: {:?}", format);
+
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {

@@ -1,13 +1,13 @@
 use shared::{math::*, transform::Transform};
 use std::ops::Range;
 use std::sync::Arc;
-use wgpu::{BindGroupDescriptor, BindGroupLayoutDescriptor, BufferUsages};
+use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
-    Buffer, BufferDesc, MaterialInstance, MaterialInstanceDesc, MaterialPipeline,
-    MaterialPipelineDesc, RenderData, RenderDevice, ResourceHandle, ResourcePool,
-    StaticInstanceData, StaticMeshVertex, Texture, TextureDesc,
+    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderData,
+    RenderDevice, Resource, ResourceHandle, ResourcePool, StaticInstanceData, StaticMeshVertex,
+    Texture, TextureDesc, render_data::StaticRenderJob, resources::get_handle,
 };
 
 #[repr(C)]
@@ -39,12 +39,14 @@ pub struct Renderer {
     resource_pool: ResourcePool,
     depth_buffer: Texture,
     _depth_sampler: wgpu::Sampler,
-    _default_sampler: wgpu::Sampler,
+    default_sampler: wgpu::Sampler,
 
-    scene_bind_group_layout: wgpu::BindGroupLayout,
+    _scene_bind_group_layout: wgpu::BindGroupLayout,
     scene_bind_group: wgpu::BindGroup,
 
     shadow_map: Texture,
+    _shadow_bind_group_layout: wgpu::BindGroupLayout,
+    shadow_bind_group: wgpu::BindGroup,
     shadow_material_pipeline: MaterialPipeline,
 
     static_material_pipeline: MaterialPipeline,
@@ -133,7 +135,7 @@ impl Renderer {
             render_device
                 .device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: None,
+                    label: Some("Scene"),
                     entries: &[
                         wgpu::BindGroupLayoutEntry {
                             binding: 0,
@@ -156,7 +158,7 @@ impl Renderer {
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
-                            binding: 3,
+                            binding: 2,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Texture {
                                 multisampled: false,
@@ -166,9 +168,38 @@ impl Renderer {
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
-                            binding: 4,
+                            binding: 3,
                             visibility: wgpu::ShaderStages::FRAGMENT,
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                            count: None,
+                        },
+                    ],
+                });
+
+        let shadow_bind_group_layout =
+            render_device
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Shadow"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
                             count: None,
                         },
                     ],
@@ -188,8 +219,8 @@ impl Renderer {
             render_device.create_material_pipeline(&MaterialPipelineDesc {
                 vertex_shader: &shadow_shader,
                 fragment_shader: None,
-                bind_group_layouts: &[&scene_bind_group_layout],
-                layout_entries: &[], // We only need the first two bindings
+                bind_group_layouts: &[&shadow_bind_group_layout],
+                layout_entries: &[],
                 vertex_layout: &StaticMeshVertex::desc(),
                 push_contant_ranges: &[],
             });
@@ -199,7 +230,7 @@ impl Renderer {
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../res/shaders/triangle.wgsl").into(),
+                    include_str!("../../res/shaders/scene.wgsl").into(),
                 ),
             });
 
@@ -230,13 +261,6 @@ impl Renderer {
                 vertex_layout: &StaticMeshVertex::desc(),
             });
 
-        let mesh = render_device.load_mesh(include_bytes!("../../../assets/models/test.dat"))?;
-        let ground_mesh =
-            render_device.load_mesh(include_bytes!("../../../assets/models/floor.dat"))?;
-
-        let texture =
-            render_device.load_texture(include_bytes!("../../../assets/textures/grid.dat"))?;
-
         let scene_bind_group = render_device
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -262,32 +286,36 @@ impl Renderer {
                 ],
             });
 
-        let material_instance = render_device.create_material_instance(
-            &static_material_pipeline,
-            &MaterialInstanceDesc {
-                entires: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&default_sampler),
-                    },
-                ],
-            },
-        );
+        let shadow_bind_group =
+            render_device
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &shadow_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buffer.buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: static_instance_buffer.buffer.as_entire_binding(),
+                        },
+                    ],
+                });
 
         Ok(Renderer {
             render_device,
             resource_pool,
-            _default_sampler: default_sampler,
+            default_sampler,
             depth_buffer,
             _depth_sampler: depth_sampler,
-            scene_bind_group_layout,
+            _scene_bind_group_layout: scene_bind_group_layout,
             scene_bind_group,
             shadow_map,
             shadow_material_pipeline,
+            shadow_bind_group,
+            _shadow_bind_group_layout: shadow_bind_group_layout,
             camera_transform: Transform {
                 position: Vec3 {
                     x: 0.0,
@@ -413,6 +441,7 @@ impl Renderer {
             self.render_batches(
                 &mut render_pass,
                 &self.shadow_material_pipeline,
+                &[&self.shadow_bind_group],
                 &draw_data.static_batches,
             );
         }
@@ -449,8 +478,8 @@ impl Renderer {
             self.render_batches(
                 &mut render_pass,
                 &self.static_material_pipeline,
+                &[&self.scene_bind_group],
                 &draw_data.static_batches,
-                None,
             );
         }
 
@@ -466,18 +495,23 @@ impl Renderer {
         &self,
         render_pass: &mut wgpu::RenderPass,
         material_pipeline: &MaterialPipeline,
+        bind_groups: &[&wgpu::BindGroup],
         batches: &[RenderBatch],
-        override_material_instance: Option<&MaterialInstance>,
     ) {
         render_pass.set_pipeline(&material_pipeline.pipeline);
         for batch in batches {
-            let material_instance = override_material_instance.unwrap_or(
-                self.resource_pool
-                    .get_material_instance(batch.material_instance)
-                    .unwrap(), // Could add a default material here maybe
-            );
+            let material_instance = self
+                .resource_pool
+                .get_material_instance(batch.material_instance)
+                .unwrap();
 
-            render_pass.set_bind_group(0, &material_instance.bindgroup, &[]);
+            let mut bind_group_index: u32 = 0;
+            for bind_group in bind_groups {
+                render_pass.set_bind_group(bind_group_index, *bind_group, &[]);
+                bind_group_index += 1;
+            }
+
+            render_pass.set_bind_group(bind_group_index, &material_instance.bind_group, &[]);
 
             let mesh = self.resource_pool.get_mesh(batch.mesh).unwrap();
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
@@ -568,5 +602,51 @@ impl Renderer {
         let light_proj = Mat4::orthographic_rh(left, right, bottom, top, near_z.max(0.1), far_z);
 
         light_proj * light_view
+    }
+
+    pub fn load_mesh(&mut self, name: &'static str, bytes: &[u8]) -> ResourceHandle {
+        let handle = get_handle(name);
+        let mesh = self
+            .render_device
+            .load_mesh(bytes)
+            .expect("Failed to load mesh");
+
+        self.resource_pool
+            .add_resource(handle, Resource::Mesh(mesh));
+
+        handle
+    }
+
+    pub fn create_material(&mut self, name: &'static str, texture_bytes: &[u8]) -> ResourceHandle {
+        let handle = get_handle(name);
+        let texture = self
+            .render_device
+            .load_texture(texture_bytes)
+            .expect("Failed to load texture");
+
+        let material_instance = self.render_device.create_material_instance(
+            &self.static_material_pipeline,
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                    },
+                ],
+            },
+        );
+
+        self.resource_pool
+            .add_resource(handle, Resource::MaterialInstance(material_instance));
+
+        handle
+    }
+
+    pub fn submit(&mut self, job: &StaticRenderJob) {
+        self.render_data.submit(job);
     }
 }

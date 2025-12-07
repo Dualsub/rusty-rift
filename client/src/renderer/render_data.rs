@@ -2,7 +2,7 @@ use std::{collections::HashMap, ops::Range};
 
 use shared::math::*;
 
-use crate::renderer::{DrawData, ResourceIndex, StaticInstanceData, renderer::RenderBatch};
+use crate::renderer::{DrawData, ResourceHandle, StaticInstanceData, renderer::RenderBatch};
 
 trait SubmitJob {
     fn submit(&self, render_data: &mut RenderData);
@@ -17,14 +17,14 @@ type StaticInstancedRenderJob = InstancedRenderJob<StaticInstanceData>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Default)]
 struct BatchKey {
-    material: ResourceIndex,
-    mesh: ResourceIndex,
+    material: ResourceHandle,
+    mesh: ResourceHandle,
 }
 
 pub struct StaticRenderJob {
     pub transform: Mat4,
-    pub material: ResourceIndex,
-    pub mesh: ResourceIndex,
+    pub material: ResourceHandle,
+    pub mesh: ResourceHandle,
 }
 
 impl SubmitJob for StaticRenderJob {
@@ -77,8 +77,8 @@ impl RenderData {
             let end = static_instances.len() as u32;
 
             static_batches.push(RenderBatch {
-                material_instance_id: key.material,
-                mesh_id: key.mesh,
+                material_instance: key.material,
+                mesh: key.mesh,
                 instance_range: Range { start, end },
             });
         }
