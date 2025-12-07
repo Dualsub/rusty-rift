@@ -115,6 +115,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // gamma correction to sRGB
     let mapped_color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
 
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(mapped_color, 1.0);
 }
 
