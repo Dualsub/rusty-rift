@@ -4,7 +4,7 @@ use shared::math::*;
 
 use crate::renderer::{DrawData, ResourceHandle, StaticInstanceData, renderer::RenderBatch};
 
-trait SubmitJob {
+pub trait SubmitJob {
     fn submit(&self, render_data: &mut RenderData);
 }
 
@@ -68,8 +68,15 @@ impl RenderData {
     }
 
     pub fn build_draw_data(&mut self) -> DrawData {
-        let mut static_batches: Vec<RenderBatch> = Vec::new();
-        let mut static_instances: Vec<StaticInstanceData> = Vec::new();
+        let batch_count = self.static_jobs.len();
+        let instance_count = self
+            .static_jobs
+            .iter()
+            .map(|(_, job)| job.instances.len())
+            .sum();
+
+        let mut static_batches: Vec<RenderBatch> = Vec::with_capacity(batch_count);
+        let mut static_instances: Vec<StaticInstanceData> = Vec::with_capacity(instance_count);
 
         for (key, job) in self.static_jobs.iter_mut() {
             let start = static_instances.len() as u32;
