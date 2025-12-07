@@ -26,10 +26,8 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
 };
 
-@group(0) @binding(0)
-var<uniform> uniform_buffer: UniformBuffer;
-@group(0) @binding(1)
-var<storage, read> instance_buffer: array<Instance>;
+@group(0) @binding(0) var<uniform> uniform_buffer: UniformBuffer;
+@group(0) @binding(1) var<storage, read> instance_buffer: array<Instance>;
 
 @vertex
 fn vs_main(
