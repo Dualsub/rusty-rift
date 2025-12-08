@@ -1,15 +1,70 @@
 use anyhow::Ok;
+use shared::math::Mat4;
 
 use crate::renderer::{Buffer, BufferDesc, RenderDevice};
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StaticMeshVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub uvs: [f32; 3],
+    pub color: [f32; 4],
+}
+
+impl StaticMeshVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4];
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<StaticMeshVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SkeletalMeshVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub uvs: [f32; 3],
+    pub color: [f32; 4],
+    pub bone_ids: [i32; 4],
+    pub bone_weights: [f32; 4],
+}
+
+impl SkeletalMeshVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Sint32x4, 5 => Float32x4];
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<SkeletalMeshVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BoneInfo {
+    id: u32,
+    parent_id: u32,
+    offset_matrix: [f32; 16],
+}
 
 #[derive(Default)]
 pub struct MeshLoadDesc {
     pub vertex_data: Vec<u8>,
     pub indices: Vec<u32>,
+    pub _bones: Vec<BoneInfo>,
 }
 
 impl MeshLoadDesc {
-    pub fn load(bytes: &[u8]) -> anyhow::Result<MeshLoadDesc> {
+    pub fn load(bytes: &[u8], vertex_size: usize) -> anyhow::Result<MeshLoadDesc> {
         let mut desc = MeshLoadDesc::default();
 
         let mut read_index: usize = 0;
@@ -26,8 +81,7 @@ impl MeshLoadDesc {
                 let vertex_count = u32::from_le_bytes(tmp);
                 read_index += 4;
 
-                const VERTEX_SIZE: usize = (3 + 3 + 3 + 4) * std::mem::size_of::<f32>();
-                let vertex_data_size = vertex_count as usize * VERTEX_SIZE;
+                let vertex_data_size = vertex_count as usize * vertex_size;
 
                 let write_start = desc.vertex_data.len();
                 desc.vertex_data.resize(write_start + vertex_data_size, 0);
@@ -61,30 +115,25 @@ impl MeshLoadDesc {
             }
         }
 
+        // If there are more bytes to read, there is a bone buffer
+        if read_index < bytes.len() {
+            tmp.copy_from_slice(&bytes[read_index..read_index + 4]);
+            let bone_count = u32::from_le_bytes(tmp) as usize;
+            read_index += 4;
+
+            const BONE_SIZE: usize = std::mem::size_of::<BoneInfo>();
+            let read_end = read_index + bone_count * BONE_SIZE;
+            desc._bones = bytemuck::pod_collect_to_vec(&bytes[read_index..read_end]);
+        }
+
         Ok(desc)
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct StaticMeshVertex {
-    pub position: [f32; 3],
-    pub normal: [f32; 3],
-    pub uvs: [f32; 3],
-    pub color: [f32; 4],
-}
-
-impl StaticMeshVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4];
-
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<StaticMeshVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
+pub struct MeshDrawInfo<'a> {
+    pub vertex_slice: wgpu::BufferSlice<'a>,
+    pub index_slice: wgpu::BufferSlice<'a>,
+    pub index_count: u32,
 }
 
 pub struct StaticMesh {
@@ -93,13 +142,48 @@ pub struct StaticMesh {
     pub index_count: u32,
 }
 
+impl StaticMesh {
+    pub fn get_draw_info(&self) -> MeshDrawInfo<'_> {
+        MeshDrawInfo {
+            vertex_slice: self.vertex_buffer.buffer.slice(..),
+            index_slice: self.index_buffer.buffer.slice(..),
+            index_count: self.index_count,
+        }
+    }
+}
+
+pub struct SkeletalMesh {
+    pub vertex_buffer: Buffer,
+    pub index_buffer: Buffer,
+    pub index_count: u32,
+    pub _bones: Vec<BoneInfo>,
+}
+
+impl SkeletalMesh {
+    pub fn get_draw_info(&self) -> MeshDrawInfo<'_> {
+        MeshDrawInfo {
+            vertex_slice: self.vertex_buffer.buffer.slice(..),
+            index_slice: self.index_buffer.buffer.slice(..),
+            index_count: self.index_count,
+        }
+    }
+}
+
 impl RenderDevice {
     pub fn load_mesh(&self, bytes: &[u8]) -> anyhow::Result<StaticMesh> {
-        let desc = MeshLoadDesc::load(bytes)?;
+        let desc = MeshLoadDesc::load(bytes, (3 + 3 + 3 + 4) * std::mem::size_of::<f32>())?;
         self.create_mesh(&desc)
     }
 
-    pub fn create_mesh(&self, desc: &MeshLoadDesc) -> anyhow::Result<StaticMesh> {
+    pub fn load_skeletal_mesh(&self, bytes: &[u8]) -> anyhow::Result<SkeletalMesh> {
+        let desc = MeshLoadDesc::load(
+            bytes,
+            (3 + 3 + 3 + 4 + 4) * std::mem::size_of::<f32>() + 4 * std::mem::size_of::<i32>(),
+        )?; // Silly I know ;)
+        self.create_skeletal_mesh(&desc)
+    }
+
+    fn create_mesh_buffers(&self, desc: &MeshLoadDesc) -> (Buffer, Buffer) {
         let vertex_buffer = self.create_buffer(&BufferDesc {
             size: desc.vertex_data.len(),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
@@ -118,10 +202,25 @@ impl RenderDevice {
             0,
         );
 
+        (vertex_buffer, index_buffer)
+    }
+
+    pub fn create_mesh(&self, desc: &MeshLoadDesc) -> anyhow::Result<StaticMesh> {
+        let (vertex_buffer, index_buffer) = self.create_mesh_buffers(desc);
         Ok(StaticMesh {
             vertex_buffer,
             index_buffer,
             index_count: desc.indices.len() as u32,
+        })
+    }
+
+    pub fn create_skeletal_mesh(&self, desc: &MeshLoadDesc) -> anyhow::Result<SkeletalMesh> {
+        let (vertex_buffer, index_buffer) = self.create_mesh_buffers(desc);
+        Ok(SkeletalMesh {
+            vertex_buffer,
+            index_buffer,
+            index_count: desc.indices.len() as u32,
+            _bones: desc._bones.clone(),
         })
     }
 }
