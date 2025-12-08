@@ -12,7 +12,9 @@ struct UniformBuffer {
 
 struct Instance {
     model_matrix: mat4x4<f32>,
-}
+    color: vec4<f32>,
+    tex_bounds: vec4<f32>,
+};
 
 struct VertexInput {
     @builtin(instance_index) instance_index: u32,
@@ -20,6 +22,8 @@ struct VertexInput {
     @location(1) normal: vec3<f32>,
     @location(2) uvs: vec3<f32>,
     @location(3) color: vec4<f32>,
+    @location(4) bone_ids: vec4<i32>,
+    @location(5) bone_weights: vec4<f32>,
 };
 
 struct VertexOutput {

@@ -1,4 +1,4 @@
-// Vertex shader
+// Fragment shader
 
 struct UniformBuffer {
     view_matrix: mat4x4<f32>,
@@ -11,6 +11,8 @@ struct UniformBuffer {
 
 struct Instance {
     model_matrix: mat4x4<f32>,
+    color: vec4<f32>,
+    tex_bounds: vec4<f32>,
 }
 
 struct VertexInput {
@@ -24,46 +26,131 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) light_space_position: vec3<f32>,
+    @location(4) world_position: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniform_buffer: UniformBuffer;
 @group(0) @binding(1) var<storage, read> instance_buffer: array<Instance>;
 
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    let position = vec4<f32>(in.position, 1.0);
+const PI: f32 = 3.14159265;
 
-    let model = instance_buffer[in.instance_index].model_matrix;
-    let mv = uniform_buffer.view_matrix * model;
-
-    var out: VertexOutput;
-    out.tex_coords = in.uvs;
-    out.clip_position = uniform_buffer.projection_matrix * mv * position;
-    out.color = in.color;
-
-    // normal in view space
-    let mv3 = mat3x3<f32>(
-        mv[0].xyz,
-        mv[1].xyz,
-        mv[2].xyz,
-    );
-    out.normal = normalize(mv3 * in.normal);
-
-    // light-space position (shadow map coords)
-    let pos_from_light = uniform_buffer.light_matrix * model * position;
-    let ndc = pos_from_light.xyz / pos_from_light.w;
-    out.light_space_position = vec3f(
-        ndc.xy * vec2f(0.5, -0.5) + vec2f(0.5, 0.5),         
-        ndc.z                                    
-    );
-
-    return out;
+fn g_schlick_ggx(n_dot_x: f32, k: f32) -> f32 {
+    let denom = n_dot_x * (1.0 - k) + k;
+    return n_dot_x / max(denom, 1e-4);
 }
 
-// Fragment shader
+fn stylized_ggx_pbr(
+    N_in: vec3<f32>,
+    V_in: vec3<f32>,
+    L_in: vec3<f32>,
+    albedo: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+    light_color: vec3<f32>,
+    ambient_top: vec3<f32>,
+    ambient_bottom: vec3<f32>,
+    visibility: f32,
+) -> vec3<f32> {
+    // Normalize inputs
+    let N = normalize(N_in);
+    let V = normalize(V_in);
+    let L = normalize(L_in);
+
+    let H = normalize(V + L);
+
+    let NdotL = max(dot(N, L), 0.0);
+    let NdotV = max(dot(N, V), 0.0);
+    let NdotH = max(dot(N, H), 0.0);
+    let VdotH = max(dot(V, H), 0.0);
+
+    // ---------------------------------------------------------------------
+    // 1. Stylized wrapped diffuse
+    // ---------------------------------------------------------------------
+    let wrap_amount: f32 = 0.4;
+    let wrapped = clamp((NdotL + wrap_amount) / (1.0 + wrap_amount), 0.0, 1.0);
+
+    let softness: f32 = 0.8;
+    let diffuse_term = pow(wrapped, softness);
+
+    // ---------------------------------------------------------------------
+    // 2. Hemispheric ambient
+    // ---------------------------------------------------------------------
+    let up = N.y * 0.5 + 0.5; // [-1,1] -> [0,1]
+    let ambient_dir_color = mix(ambient_bottom, ambient_top, up);
+    let ambient_strength: f32 = 0.4;
+    let ambient = ambient_dir_color * ambient_strength;
+
+    let diffuse_light = light_color * diffuse_term * visibility;
+    let base_diffuse = albedo * (diffuse_light + ambient);
+
+    // ---------------------------------------------------------------------
+    // 3. GGX specular
+    // ---------------------------------------------------------------------
+    let a = roughness * roughness;
+    let a2 = a * a;
+
+    // Normal distribution function (GGX / Trowbridge-Reitz)
+    let denom_d = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    let D = a2 / (PI * denom_d * denom_d + 1e-4);
+
+    // Geometry term (Smith with Schlick-GGX)
+    var k = a + 1.0;
+    k = (k * k) / 8.0;
+
+    let Gv = g_schlick_ggx(NdotV, k);
+    let Gl = g_schlick_ggx(NdotL, k);
+    let G = Gv * Gl;
+
+    // Fresnel (Schlick approximation)
+    let F0 = mix(vec3<f32>(0.04, 0.04, 0.04), albedo, metallic);
+    let one_minus_vh = 1.0 - VdotH;
+    let one_minus_vh5 = one_minus_vh * one_minus_vh * one_minus_vh * one_minus_vh * one_minus_vh;
+    let F = F0 + (vec3<f32>(1.0, 1.0, 1.0) - F0) * one_minus_vh5;
+
+    let numer = D * G * F;
+    let denom_spec = max(4.0 * NdotL * NdotV, 1e-4);
+    var spec_brdf = numer / denom_spec;
+
+    // Light * NdotL
+    var specular = spec_brdf * light_color * NdotL * visibility;
+
+    // Stylized control: boost and clamp a bit
+    let spec_boost: f32 = 1.0;
+    let spec_max_clamp: f32 = 5.0;
+    specular *= spec_boost;
+    specular = clamp(specular, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(spec_max_clamp, spec_max_clamp, spec_max_clamp));
+
+    // Soft compression to avoid insane hotspots
+    specular = specular / (specular + vec3<f32>(1.0, 1.0, 1.0));
+
+    // ---------------------------------------------------------------------
+    // 4. Rim light for champions
+    // ---------------------------------------------------------------------
+    // let ndotv = NdotV;
+    // var rim = 1.0 - ndotv;
+
+    // let rim_power: f32 = 2.5;     // higher = thinner rim
+    // let rim_intensity: f32 = 0.5; // overall strength
+    // rim = pow(rim, rim_power);
+
+    // // Make rim depend somewhat on lighting so dark backsides don't glow too much
+    // rim *= (0.3 + 0.7 * diffuse_term);
+
+    // let rim_color = normalize(light_color + vec3<f32>(0.3, 0.3, 0.3));
+    // let rim_light = rim_color * rim * rim_intensity;
+
+    // ---------------------------------------------------------------------
+    // 5. Final color
+    // ---------------------------------------------------------------------
+    var color = base_diffuse + specular;
+    color = clamp(color, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+
+    return color;
+}
+
 @group(0) @binding(2) var shadow_map: texture_depth_2d;
 @group(0) @binding(3) var shadow_sampler: sampler_comparison;
 
@@ -89,28 +176,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     visibility /= 9.0;
-    visibility = mix(0.5, 1.0, visibility);
+    visibility = mix(0.4, 1.0, visibility);
 
-    let albedo_color =  textureSample(
+    let albedo =  textureSample(
         albedo_texture,
         albedo_sampler,
         in.tex_coords.xy,
-        u32(in.tex_coords.z)
-    ).rgb;
+        i32(in.tex_coords.z)
+    ).rgb * in.color.rgb;
 
     let light_color = uniform_buffer.light_color.rgb;
 
-    // light direction in view space (matches in.normal)
-    let light_dir_view = normalize(
-        (uniform_buffer.view_matrix * vec4<f32>(-uniform_buffer.light_direction, 0.0)).xyz
+    let N = normalize(in.world_normal);
+    let V = normalize(uniform_buffer.camera_position - in.world_position);
+    let L = normalize(-uniform_buffer.light_direction);
+
+    let roughness: f32 = 0.8;
+    let metallic: f32 = 0.0;
+    let ambient_top    = vec3<f32>(0.35, 0.50, 0.80);
+    let ambient_bottom = vec3<f32>(0.30, 0.25, 0.20);
+
+    let color = stylized_ggx_pbr(
+        N,
+        V,
+        L,
+        albedo,
+        roughness,
+        metallic,
+        light_color,
+        ambient_top,
+        ambient_bottom,
+        visibility
     );
-
-    // diffuse shading
-    let diff = max(dot(in.normal, light_dir_view), 0.0);
-    let ambient = 0.2 * light_color;
-
-    // simple lambert + ambient
-    let color = ambient + visibility * diff * albedo_color;
 
     // gamma correction to sRGB
     let mapped_color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
