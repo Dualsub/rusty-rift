@@ -3476,6 +3476,8 @@ dependencies = [
  "asset-importer",
  "clap",
  "image",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
