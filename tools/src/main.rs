@@ -16,6 +16,8 @@ enum Commands {
         path: String,
         #[arg(short, long)]
         output: String,
+        #[arg(short, long)]
+        skeleton_output: Option<String>,
     },
     Texture {
         path: String,
@@ -32,9 +34,16 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Mesh { path, output } => {
-            mesh::load(&path, &output).expect("Failed to load mesh.")
-        }
+        Commands::Mesh {
+            path,
+            output,
+            skeleton_output,
+        } => mesh::load(&mesh::MeshLoadDesc {
+            path: &path,
+            output: &output,
+            skeleton_output: skeleton_output.as_deref(),
+        })
+        .expect("Failed to load mesh."),
         Commands::Texture {
             path,
             output,
