@@ -1,4 +1,4 @@
-use glam::{Quat, Vec3, vec3a};
+use glam::{Quat, Vec3};
 use shared::math::*;
 
 use crate::renderer::{
@@ -7,28 +7,70 @@ use crate::renderer::{
 
 pub struct Game {
     turn: f32,
+    bones: Vec<Mat4Data>,
+    animation_frame_accumulator: f32,
 }
 
 impl Game {
     pub fn new() -> Self {
-        Self { turn: 0.0 }
+        Self {
+            turn: 0.0,
+            bones: vec![Mat4::IDENTITY.to_data(); 72],
+            animation_frame_accumulator: 0.0,
+        }
     }
 
     pub fn update(&mut self, dt: f32) {
-        self.turn += 1.0 * dt;
+        self.turn += 0.0 * dt;
+        self.animation_frame_accumulator += dt * 60.0;
     }
 
     pub fn load_resources(&mut self, renderer: &mut Renderer) {
-        renderer.load_skeletal_mesh("Brute", include_bytes!("../../assets/models/brute.dat"));
-        renderer.load_mesh("Floor", include_bytes!("../../assets/models/floor.dat"));
         renderer.create_material("Grid", include_bytes!("../../assets/textures/grid.dat"));
+        renderer.load_mesh("Floor", include_bytes!("../../assets/models/floor.dat"));
+
+        renderer.create_material(
+            "BruteMaterial",
+            include_bytes!(
+                "../../assets/champions/brute/textures/MaleBruteA_Body_diffuse1_ncl1_1.dat"
+            ),
+        );
+
+        renderer.load_skeletal_mesh(
+            "Brute",
+            include_bytes!("../../assets/champions/brute/Brute.dat"),
+        );
+        renderer.load_animation(
+            "Brute_Idle",
+            include_bytes!("../../assets/champions/brute/animations/Brute_Idle.dat"),
+        );
+
+        renderer.load_animation(
+            "Brute_Run",
+            include_bytes!("../../assets/champions/brute/animations/Brute_Run.dat"),
+        );
     }
 
-    pub fn render(&self, renderer: &mut Renderer) {
+    pub fn render(&mut self, renderer: &mut Renderer) {
+        renderer.fill_bone_matrix(
+            get_handle("Brute"),
+            get_handle("Brute_Idle"),
+            self.animation_frame_accumulator as usize,
+            &mut self.bones,
+        );
+
         renderer.submit(&SkeletalRenderJob {
-            transform: Mat4::IDENTITY,
-            material: get_handle("Grid"),
+            transform: Mat4::from_rotation_x(-90.0_f32.to_radians())
+                * Mat4::from_rotation_z(-self.turn),
+            material: get_handle("BruteMaterial"),
             mesh: get_handle("Brute"),
+            color: Vec4 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+                w: 1.0,
+            },
+            bones: &self.bones,
             ..Default::default()
         });
 
@@ -57,9 +99,9 @@ impl Game {
         {
             renderer.set_lighting_direction(
                 Vec3 {
-                    x: self.turn.sin(),
+                    x: 0.0, //self.turn.sin(),
                     y: -2.0,
-                    z: self.turn.cos(),
+                    z: 0.0, //self.turn.cos(),
                 }
                 .normalize(),
             );
@@ -67,10 +109,12 @@ impl Game {
 
         // Camera
         {
-            let camera_target = glam::vec3(0.0, 150.0, 0.0);
+            let camera_target = glam::vec3(0.0, 120.0, 0.0);
 
-            const CAMERA_RADIUS: f32 = 300.0;
-            const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
+            const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
+            const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
+            // const CAMERA_RADIUS: f32 = 600.0_f32;
+            // const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
 
             let camera_position = camera_target
                 + Vec3 {
