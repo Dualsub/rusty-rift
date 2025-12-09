@@ -1,6 +1,6 @@
 # Rusty Rift
 
-<img src="./banner.jpg">
+<img src="./banner.gif">
 
 ## Plans
 
@@ -9,8 +9,8 @@
 - [x] Client window and renderer
 - Renderer features
     - [x] Static mesh rendering
-    - [ ] Shadow mapping
-    - [ ] Skeletal animation (GPU? or nah?)
+    - [x] Shadow mapping
+    - [x] Skeletal animation
 
 ### Phase 2
 
