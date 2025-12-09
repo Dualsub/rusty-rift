@@ -13,6 +13,7 @@ struct Instance {
     model_matrix: mat4x4<f32>,
     color: vec4<f32>,
     tex_bounds: vec4<f32>,
+    bone_offset: u32,
 }
 
 struct VertexInput {
@@ -36,6 +37,7 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> uniform_buffer: UniformBuffer;
 @group(0) @binding(1) var<storage, read> instance_buffer: array<Instance>;
+@group(0) @binding(4) var<storage, read> bone_buffer: array<mat4x4<f32>>;
 
 fn get_bone_debug_color(bone_id : i32) -> vec3<f32> {
     let n = u32(bone_id) * 1664525u + 1013904223u;
@@ -48,30 +50,39 @@ fn get_bone_debug_color(bone_id : i32) -> vec3<f32> {
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-    let position = vec4<f32>(in.position, 1.0);
 
+    let position = vec4<f32>(in.position, 1.0);
     let instance = instance_buffer[in.instance_index];
+
+    var skinned_pos = vec4<f32>(0.0);
+    for (var i = 0; i < 4; i++) {
+        if (in.bone_ids[i] == -1) {
+            continue;
+        }
+
+        skinned_pos += bone_buffer[instance.bone_offset + u32(in.bone_ids[i])] * position * in.bone_weights[i];
+    }
 
     let model = instance.model_matrix;
 
     // World-space position
-    let world_pos = model * position;
+    let world_pos = model * skinned_pos;
 
     // View-space position
     let view_pos = uniform_buffer.view_matrix * world_pos;
 
-    var bone_debug_color = vec3<f32>(0.0, 0.0, 0.0);
-    for (var i = 0; i < 4; i++) {
-        let id = in.bone_ids[i];
-        let weight = in.bone_weights[i];
-        bone_debug_color = bone_debug_color + get_bone_debug_color(id) * weight;
-    }
+    // var bone_debug_color = vec3<f32>(0.0, 0.0, 0.0);
+    // for (var i = 0; i < 4; i++) {
+    //     let id = in.bone_ids[i];
+    //     let weight = in.bone_weights[i];
+    //     bone_debug_color = bone_debug_color + get_bone_debug_color(id) * weight;
+    // }
 
     var out: VertexOutput;
     out.tex_coords = vec3<f32>(instance.tex_bounds.xy + in.uvs.xy * instance.tex_bounds.zw, in.uvs.z);
     out.clip_position = uniform_buffer.projection_matrix * view_pos;
-    // out.color = in.color * instance.color;
-    out.color = vec4<f32>(bone_debug_color, 1.0);
+    out.color = in.color * instance.color;
+    // out.color = vec4<f32>(bone_debug_color, 1.0);
 
     // World-space normal (ignoring non-uniform scale issues for now)
     let model3 = mat3x3<f32>(
