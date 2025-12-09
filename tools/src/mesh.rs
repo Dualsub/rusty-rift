@@ -13,14 +13,14 @@ pub struct MeshLoadDesc<'a> {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
-struct BoneInfo {
-    name: String,
-    id: i32,
-    parent_id: i32,
-    offset_matrix: [f32; 16],
+pub struct BoneInfo {
+    pub name: String,
+    pub id: i32,
+    pub parent_id: i32,
+    pub offset_matrix: [f32; 16],
 }
 
-type BoneMap = HashMap<String, BoneInfo>;
+pub type BoneMap = HashMap<String, BoneInfo>;
 
 pub fn load(desc: &MeshLoadDesc) -> std::io::Result<()> {
     let importer = Importer::new();
@@ -29,7 +29,8 @@ pub fn load(desc: &MeshLoadDesc) -> std::io::Result<()> {
         .with_post_process(
             PostProcessSteps::TRIANGULATE
                 | PostProcessSteps::FLIP_UVS
-                | PostProcessSteps::GEN_SMOOTH_NORMALS,
+                | PostProcessSteps::GEN_SMOOTH_NORMALS
+                | PostProcessSteps::POPULATE_ARMATURE_DATA,
         )
         .import_file(desc.path)
         .expect("Could not import scene.");

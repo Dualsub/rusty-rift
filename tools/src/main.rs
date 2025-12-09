@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+mod animation;
 mod mesh;
 mod texture;
 
@@ -28,6 +29,13 @@ enum Commands {
         #[arg(short = 'y', long = "resize-height")]
         resize_height: Option<u32>,
     },
+    Animation {
+        path: String,
+        #[arg(short, long)]
+        skeleton: String,
+        #[arg(short, long)]
+        output: String,
+    },
 }
 
 fn main() {
@@ -56,5 +64,14 @@ fn main() {
             resize_height: *resize_height,
         })
         .expect("Failed to load texture."),
+        Commands::Animation {
+            path,
+            skeleton,
+            output,
+        } => animation::load(&animation::AnimationLoadDesc {
+            path: &path,
+            skeleton: &skeleton,
+            output: &output,
+        }),
     }
 }
