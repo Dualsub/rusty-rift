@@ -56,20 +56,22 @@ impl SubmitJob for StaticRenderJob {
             color: self.color.to_data(),
             tex_coord: self.tex_coord.to_data(),
             tex_scale: self.tex_scale.to_data(),
+            ..Default::default()
         });
     }
 }
 
-pub struct SkeletalRenderJob {
+pub struct SkeletalRenderJob<'a> {
     pub transform: Mat4,
     pub material: ResourceHandle,
     pub mesh: ResourceHandle,
     pub color: Vec4,
     pub tex_coord: Vec2,
     pub tex_scale: Vec2,
+    pub bones: &'a [Mat4Data],
 }
 
-impl Default for SkeletalRenderJob {
+impl Default for SkeletalRenderJob<'_> {
     fn default() -> Self {
         Self {
             transform: Mat4::IDENTITY,
@@ -78,16 +80,21 @@ impl Default for SkeletalRenderJob {
             color: Vec4::ONE,
             tex_coord: Vec2::ZERO,
             tex_scale: Vec2::ONE,
+            bones: &[],
         }
     }
 }
 
-impl SubmitJob for SkeletalRenderJob {
+impl SubmitJob for SkeletalRenderJob<'_> {
     fn submit(&self, render_data: &mut RenderData) {
         let key = BatchKey {
             mesh: self.mesh,
             material: self.material,
         };
+
+        let bone_index = render_data.bones.len() as u32;
+        let mut bones = self.bones.to_vec();
+        render_data.bones.append(&mut bones);
 
         let instanced_job = render_data.skeletal_jobs.entry(key).or_default();
         instanced_job.instances.push(StaticInstanceData {
@@ -95,6 +102,7 @@ impl SubmitJob for SkeletalRenderJob {
             color: self.color.to_data(),
             tex_coord: self.tex_coord.to_data(),
             tex_scale: self.tex_scale.to_data(),
+            data_indices: [bone_index, 0, 0, 0],
         });
     }
 }
@@ -104,6 +112,7 @@ type JobMap = HashMap<BatchKey, StaticInstancedRenderJob>;
 pub struct RenderData {
     static_jobs: JobMap,
     skeletal_jobs: JobMap,
+    bones: Vec<Mat4Data>,
 }
 
 impl RenderData {
@@ -111,6 +120,7 @@ impl RenderData {
         Self {
             static_jobs: HashMap::new(),
             skeletal_jobs: HashMap::new(),
+            bones: Vec::new(),
         }
     }
 
@@ -151,11 +161,15 @@ impl RenderData {
         let (static_batches, static_instances) = Self::build_batches(&mut self.static_jobs);
         let (skeletal_batches, skeletal_instances) = Self::build_batches(&mut self.skeletal_jobs);
 
+        let bones = self.bones.clone();
+        self.bones.clear();
+
         DrawData {
             static_batches,
             static_instances,
             skeletal_batches,
             skeletal_instances,
+            bones,
         }
     }
 

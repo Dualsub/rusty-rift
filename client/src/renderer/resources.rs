@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use crate::renderer::{
-    MaterialInstance, MaterialPipeline, MeshDrawInfo, SkeletalMesh, StaticMesh, Texture,
+    Animation, MaterialInstance, MaterialPipeline, MeshDrawInfo, SkeletalMesh, StaticMesh, Texture,
 };
 
 pub enum Resource {
     StaticMesh(StaticMesh),
     SkeletalMesh(SkeletalMesh),
+    Animation(Animation),
     Texture(Texture),
     MaterialPipeline(MaterialPipeline),
     MaterialInstance(MaterialInstance),
@@ -80,11 +81,31 @@ impl ResourcePool {
         }
     }
 
+    pub fn get_skeletal_mesh(&self, handle: ResourceHandle) -> Option<&SkeletalMesh> {
+        match self.get_resource(handle) {
+            Some(resource) => match resource {
+                Resource::SkeletalMesh(mesh) => Some(mesh),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn get_mesh_draw_info(&'_ self, handle: ResourceHandle) -> Option<MeshDrawInfo<'_>> {
         match self.get_resource(handle) {
             Some(resource) => match resource {
                 Resource::StaticMesh(mesh) => Some(mesh.get_draw_info()),
                 Resource::SkeletalMesh(mesh) => Some(mesh.get_draw_info()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub fn get_animation(&self, handle: ResourceHandle) -> Option<&Animation> {
+        match self.get_resource(handle) {
+            Some(resource) => match resource {
+                Resource::Animation(animation) => Some(animation),
                 _ => None,
             },
             _ => None,

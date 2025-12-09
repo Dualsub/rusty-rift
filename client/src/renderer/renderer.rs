@@ -37,12 +37,66 @@ pub struct DrawData {
 
     pub skeletal_batches: Vec<RenderBatch>,
     pub skeletal_instances: Vec<StaticInstanceData>,
+    pub bones: Vec<Mat4Data>,
 }
 
 // A short-term abstraction
 pub struct MaterialGroup {
     static_material_pipeline: MaterialPipeline,
     skeletal_material_pipeline: MaterialPipeline,
+}
+
+pub struct BindCollection {
+    bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+pub struct BindEntry<'a> {
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    ty: wgpu::BindingType,
+    resource: wgpu::BindingResource<'a>,
+}
+
+impl RenderDevice {
+    pub fn create_bind_collection<'a>(&self, entries: Vec<BindEntry<'a>>) -> BindCollection {
+        // First build layout entries (we only need binding/visibility/type here)
+        let layout_entries: Vec<wgpu::BindGroupLayoutEntry> = entries
+            .iter()
+            .map(|e| wgpu::BindGroupLayoutEntry {
+                binding: e.binding,
+                visibility: e.visibility,
+                ty: e.ty.clone(),
+                count: None,
+            })
+            .collect();
+
+        let bind_group_layout =
+            self.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &layout_entries,
+                });
+
+        let group_entries: Vec<wgpu::BindGroupEntry> = entries
+            .into_iter()
+            .map(|e| wgpu::BindGroupEntry {
+                binding: e.binding,
+                resource: e.resource,
+            })
+            .collect();
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &group_entries,
+        });
+
+        BindCollection {
+            bind_group,
+            bind_group_layout,
+        }
+    }
 }
 
 pub struct Renderer {
@@ -52,16 +106,13 @@ pub struct Renderer {
     _depth_sampler: wgpu::Sampler,
     default_sampler: wgpu::Sampler,
 
-    _scene_bind_group_layout: wgpu::BindGroupLayout,
-    static_scene_bind_group: wgpu::BindGroup,
-    skeletal_scene_bind_group: wgpu::BindGroup,
-
     shadow_map: Texture,
-    _shadow_bind_group_layout: wgpu::BindGroupLayout,
-    static_shadow_bind_group: wgpu::BindGroup,
-    skeletal_shadow_bind_group: wgpu::BindGroup,
+    static_shadow_bind_collection: BindCollection,
+    skeletal_shadow_bind_collection: BindCollection,
     shadow_material_pipeline: MaterialGroup,
 
+    static_scene_bind_collection: BindCollection,
+    skeletal_scene_bind_collection: BindCollection,
     scene_material_pipeline: MaterialGroup,
 
     camera_transform: Transform,
@@ -70,6 +121,7 @@ pub struct Renderer {
 
     static_instance_buffer: Buffer,
     skeletal_instance_buffer: Buffer,
+    bone_buffer: Buffer,
 
     render_data: RenderData,
 }
@@ -79,6 +131,7 @@ impl Renderer {
     const SHADOW_MAP_HEIGHT: u32 = 2048;
 
     const STATIC_INSTANCE_COUNT: usize = 512;
+    const BONE_COUNT: usize = Self::STATIC_INSTANCE_COUNT * 64;
 
     fn create_depth_buffer(render_device: &RenderDevice) -> Texture {
         render_device.create_texture(&TextureDesc {
@@ -91,40 +144,35 @@ impl Renderer {
         })
     }
 
-    pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
-        let render_device = RenderDevice::new(&window).await?;
-        let resource_pool = ResourcePool::new();
+    fn create_samplers(device: &wgpu::Device) -> (wgpu::Sampler, wgpu::Sampler) {
+        let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
-        let default_sampler = render_device
-            .device
-            .create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
+        let depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::Less),
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 100.0,
+            ..Default::default()
+        });
 
-        let depth_sampler = render_device
-            .device
-            .create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                compare: Some(wgpu::CompareFunction::Less),
-                lod_min_clamp: 0.0,
-                lod_max_clamp: 100.0,
-                ..Default::default()
-            });
+        (default_sampler, depth_sampler)
+    }
 
-        let depth_buffer = Renderer::create_depth_buffer(&render_device);
-
-        let shadow_map = render_device.create_texture(&TextureDesc {
+    fn create_shadow_map(render_device: &RenderDevice) -> Texture {
+        render_device.create_texture(&TextureDesc {
             width: Self::SHADOW_MAP_WIDTH,
             height: Self::SHADOW_MAP_HEIGHT,
             layer_count: 1,
@@ -133,102 +181,212 @@ impl Renderer {
             view_dimension: wgpu::TextureViewDimension::D2,
             aspect: wgpu::TextureAspect::DepthOnly,
             ..Default::default()
-        });
+        })
+    }
+
+    fn create_storage_buffers(render_device: &RenderDevice) -> (Buffer, Buffer, Buffer) {
+        let size = Self::STATIC_INSTANCE_COUNT * std::mem::size_of::<StaticInstanceData>();
 
         let static_instance_buffer = render_device.create_buffer(&BufferDesc {
-            size: Self::STATIC_INSTANCE_COUNT * std::mem::size_of::<StaticInstanceData>(),
+            size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
         let skeletal_instance_buffer = render_device.create_buffer(&BufferDesc {
-            size: Self::STATIC_INSTANCE_COUNT * std::mem::size_of::<StaticInstanceData>(),
+            size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
-        let uniform_buffer = render_device.create_buffer(&BufferDesc {
-            size: std::mem::size_of::<UniformBufferData>(),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        let bone_buffer = render_device.create_buffer(&BufferDesc {
+            size: Self::BONE_COUNT * std::mem::size_of::<Mat4Data>(),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
-        let scene_bind_group_layout =
-            render_device
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Scene"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                multisampled: false,
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                sample_type: wgpu::TextureSampleType::Depth,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 3,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                            count: None,
-                        },
-                    ],
-                });
+        (
+            static_instance_buffer,
+            skeletal_instance_buffer,
+            bone_buffer,
+        )
+    }
 
-        let shadow_bind_group_layout =
-            render_device
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Shadow"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
+    fn create_uniform_buffer(render_device: &RenderDevice) -> Buffer {
+        render_device.create_buffer(&BufferDesc {
+            size: std::mem::size_of::<UniformBufferData>(),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        })
+    }
 
+    fn create_bind_collections(
+        render_device: &RenderDevice,
+        uniform_buffer: &Buffer,
+        shadow_map: &Texture,
+        depth_sampler: &wgpu::Sampler,
+        static_instance_buffer: &Buffer,
+        skeletal_instance_buffer: &Buffer,
+        bone_buffer: &Buffer,
+    ) -> (
+        BindCollection,
+        BindCollection,
+        BindCollection,
+        BindCollection,
+    ) {
+        let static_scene = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: uniform_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: static_instance_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                resource: wgpu::BindingResource::TextureView(&shadow_map.view),
+            },
+            BindEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                resource: wgpu::BindingResource::Sampler(depth_sampler),
+            },
+        ]);
+
+        let skeletal_scene = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: uniform_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: skeletal_instance_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                resource: wgpu::BindingResource::TextureView(&shadow_map.view),
+            },
+            BindEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                resource: wgpu::BindingResource::Sampler(depth_sampler),
+            },
+            BindEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: bone_buffer.buffer.as_entire_binding(),
+            },
+        ]);
+
+        let static_shadow = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: uniform_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: static_instance_buffer.buffer.as_entire_binding(),
+            },
+        ]);
+
+        let skeletal_shadow = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: uniform_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: skeletal_instance_buffer.buffer.as_entire_binding(),
+            },
+            BindEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: bone_buffer.buffer.as_entire_binding(),
+            },
+        ]);
+
+        return (static_scene, skeletal_scene, static_shadow, skeletal_shadow);
+    }
+
+    fn create_shadow_material_pipelines(
+        render_device: &RenderDevice,
+        static_bind_group_layout: &wgpu::BindGroupLayout,
+        skeletal_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> MaterialGroup {
         let static_shadow_shader =
             render_device
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Shader"),
+                    label: Some("StaticShadowShader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("../../res/shaders/static_shadow.wgsl").into(),
                     ),
@@ -238,18 +396,18 @@ impl Renderer {
             render_device
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Shader"),
+                    label: Some("SkeletalShadowShader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("../../res/shaders/skeletal_shadow.wgsl").into(),
                     ),
                 });
 
-        let shadow_material_pipeline = MaterialGroup {
+        MaterialGroup {
             static_material_pipeline: render_device.create_material_pipeline(
                 &MaterialPipelineDesc {
                     vertex_shader: &static_shadow_shader,
                     fragment_shader: None,
-                    bind_group_layouts: &[&shadow_bind_group_layout],
+                    bind_group_layouts: &[static_bind_group_layout],
                     layout_entries: &[],
                     vertex_layout: &StaticMeshVertex::desc(),
                     push_contant_ranges: &[],
@@ -259,186 +417,131 @@ impl Renderer {
                 &MaterialPipelineDesc {
                     vertex_shader: &skeletal_shadow_shader,
                     fragment_shader: None,
-                    bind_group_layouts: &[&shadow_bind_group_layout],
+                    bind_group_layouts: &[skeletal_bind_group_layout],
                     layout_entries: &[],
                     vertex_layout: &SkeletalMeshVertex::desc(),
                     push_contant_ranges: &[],
                 },
             ),
-        };
+        }
+    }
 
+    fn create_scene_material_pipelines(
+        render_device: &RenderDevice,
+        static_bind_group_layout: &wgpu::BindGroupLayout,
+        skeletal_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> MaterialGroup {
         let static_vertex_shader =
             render_device
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Shader"),
+                    label: Some("StaticVertexShader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("../../res/shaders/static.wgsl").into(),
                     ),
                 });
+
         let skeletal_vertex_shader =
             render_device
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Shader"),
+                    label: Some("SkeletalVertexShader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("../../res/shaders/skeletal.wgsl").into(),
                     ),
                 });
+
         let fragment_shader =
             render_device
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Shader"),
+                    label: Some("SceneFragmentShader"),
                     source: wgpu::ShaderSource::Wgsl(
                         include_str!("../../res/shaders/scene.wgsl").into(),
                     ),
                 });
 
-        let scene_material_pipeline = MaterialGroup {
+        let material_layout_entries = [
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ];
+
+        MaterialGroup {
             static_material_pipeline: render_device.create_material_pipeline(
                 &MaterialPipelineDesc {
-                    bind_group_layouts: &[&scene_bind_group_layout],
+                    bind_group_layouts: &[static_bind_group_layout],
                     push_contant_ranges: &[],
                     vertex_shader: &static_vertex_shader,
                     fragment_shader: Some(&fragment_shader),
-                    layout_entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                multisampled: false,
-                                view_dimension: wgpu::TextureViewDimension::D2Array,
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
+                    layout_entries: &material_layout_entries,
                     vertex_layout: &StaticMeshVertex::desc(),
                 },
             ),
             skeletal_material_pipeline: render_device.create_material_pipeline(
                 &MaterialPipelineDesc {
-                    bind_group_layouts: &[&scene_bind_group_layout],
+                    bind_group_layouts: &[skeletal_bind_group_layout],
                     push_contant_ranges: &[],
                     vertex_shader: &skeletal_vertex_shader,
                     fragment_shader: Some(&fragment_shader),
-                    layout_entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Texture {
-                                multisampled: false,
-                                view_dimension: wgpu::TextureViewDimension::D2Array,
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                    ],
+                    layout_entries: &material_layout_entries,
                     vertex_layout: &SkeletalMeshVertex::desc(),
                 },
             ),
-        };
+        }
+    }
 
-        let static_scene_bind_group =
-            render_device
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &scene_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: uniform_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: static_instance_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&shadow_map.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&depth_sampler),
-                        },
-                    ],
-                });
+    pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
+        let render_device = RenderDevice::new(window).await?;
+        let resource_pool = ResourcePool::new();
 
-        let skeletal_scene_bind_group =
-            render_device
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &scene_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: uniform_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: skeletal_instance_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&shadow_map.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&depth_sampler),
-                        },
-                    ],
-                });
+        let (default_sampler, depth_sampler) = Self::create_samplers(&render_device.device);
 
-        let static_shadow_bind_group =
-            render_device
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &shadow_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: uniform_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: static_instance_buffer.buffer.as_entire_binding(),
-                        },
-                    ],
-                });
+        let depth_buffer = Renderer::create_depth_buffer(&render_device);
+        let shadow_map = Self::create_shadow_map(&render_device);
 
-        let skeletal_shadow_bind_group =
-            render_device
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &shadow_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: uniform_buffer.buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: skeletal_instance_buffer.buffer.as_entire_binding(),
-                        },
-                    ],
-                });
+        let (static_instance_buffer, skeletal_instance_buffer, bone_buffer) =
+            Self::create_storage_buffers(&render_device);
+        let uniform_buffer = Self::create_uniform_buffer(&render_device);
+
+        let (
+            static_scene_bind_collection,
+            skeletal_scene_bind_collection,
+            static_shadow_bind_collection,
+            skeletal_shadow_bind_collection,
+        ) = Self::create_bind_collections(
+            &render_device,
+            &uniform_buffer,
+            &shadow_map,
+            &depth_sampler,
+            &static_instance_buffer,
+            &skeletal_instance_buffer,
+            &bone_buffer,
+        );
+
+        let shadow_material_pipeline = Self::create_shadow_material_pipelines(
+            &render_device,
+            &static_shadow_bind_collection.bind_group_layout,
+            &skeletal_shadow_bind_collection.bind_group_layout,
+        );
+        let scene_material_pipeline = Self::create_scene_material_pipelines(
+            &render_device,
+            &static_scene_bind_collection.bind_group_layout,
+            &skeletal_scene_bind_collection.bind_group_layout,
+        );
 
         Ok(Renderer {
             render_device,
@@ -446,14 +549,10 @@ impl Renderer {
             default_sampler,
             depth_buffer,
             _depth_sampler: depth_sampler,
-            _scene_bind_group_layout: scene_bind_group_layout,
-            static_scene_bind_group,
-            skeletal_scene_bind_group,
             shadow_map,
+            static_shadow_bind_collection,
+            skeletal_shadow_bind_collection,
             shadow_material_pipeline,
-            static_shadow_bind_group,
-            skeletal_shadow_bind_group,
-            _shadow_bind_group_layout: shadow_bind_group_layout,
             camera_transform: Transform {
                 position: Vec3 {
                     x: 0.0,
@@ -475,7 +574,10 @@ impl Renderer {
             },
             static_instance_buffer,
             skeletal_instance_buffer,
+            bone_buffer,
             scene_material_pipeline,
+            static_scene_bind_collection,
+            skeletal_scene_bind_collection,
         })
     }
 
@@ -513,7 +615,7 @@ impl Renderer {
             f32::to_radians(40.0),
             self.render_device.config.width as f32 / self.render_device.config.height as f32,
             1.0,
-            2000.0,
+            3000.0,
         );
         self.uniform_data.projection_matrix = projection_matrix.to_data();
 
@@ -552,6 +654,12 @@ impl Renderer {
             bytemuck::cast_slice(draw_data.skeletal_instances.as_slice()),
             0,
         );
+
+        self.render_device.write_buffer(
+            &self.bone_buffer,
+            bytemuck::cast_slice(draw_data.bones.as_slice()),
+            0,
+        );
     }
 
     fn draw_frame(&self, draw_data: &DrawData) -> Result<(), wgpu::SurfaceError> {
@@ -586,14 +694,14 @@ impl Renderer {
             self.render_batches(
                 &mut render_pass,
                 &self.shadow_material_pipeline.static_material_pipeline,
-                &[&self.static_shadow_bind_group],
+                &[&self.static_shadow_bind_collection.bind_group],
                 &draw_data.static_batches,
             );
 
             self.render_batches(
                 &mut render_pass,
                 &self.shadow_material_pipeline.skeletal_material_pipeline,
-                &[&self.skeletal_shadow_bind_group],
+                &[&self.skeletal_shadow_bind_collection.bind_group],
                 &draw_data.skeletal_batches,
             );
         }
@@ -630,14 +738,14 @@ impl Renderer {
             self.render_batches(
                 &mut render_pass,
                 &self.scene_material_pipeline.static_material_pipeline,
-                &[&self.static_scene_bind_group],
+                &[&self.static_scene_bind_collection.bind_group],
                 &draw_data.static_batches,
             );
 
             self.render_batches(
                 &mut render_pass,
                 &self.scene_material_pipeline.skeletal_material_pipeline,
-                &[&self.skeletal_scene_bind_group],
+                &[&self.skeletal_scene_bind_collection.bind_group],
                 &draw_data.skeletal_batches,
             );
         }
@@ -798,6 +906,19 @@ impl Renderer {
         handle
     }
 
+    pub fn load_animation(&mut self, name: &'static str, bytes: &[u8]) -> ResourceHandle {
+        let handle = get_handle(name);
+        let animation = self
+            .render_device
+            .load_animation(bytes)
+            .expect("Failed to load animation");
+
+        self.resource_pool
+            .add_resource(handle, Resource::Animation(animation));
+
+        handle
+    }
+
     pub fn create_material(&mut self, name: &'static str, texture_bytes: &[u8]) -> ResourceHandle {
         let handle = get_handle(name);
         let texture = self
@@ -825,6 +946,55 @@ impl Renderer {
             .add_resource(handle, Resource::MaterialInstance(material_instance));
 
         handle
+    }
+
+    pub fn get_bone_matrix(
+        &self,
+        mesh_handle: ResourceHandle,
+        animation_handle: ResourceHandle,
+        bone_index: usize,
+        frame_index: usize,
+    ) -> Mat4 {
+        let mesh = self.resource_pool.get_skeletal_mesh(mesh_handle).unwrap();
+        let animation = self.resource_pool.get_animation(animation_handle).unwrap();
+
+        animation.frames[frame_index * mesh.bones.len() + bone_index].to_matrix()
+            * Mat4::from_cols_array(&mesh.bones[bone_index].offset_matrix)
+    }
+
+    pub fn fill_bone_matrix(
+        &self,
+        mesh_handle: ResourceHandle,
+        animation_handle: ResourceHandle,
+        frame_index: usize,
+        bones: &mut [Mat4Data],
+    ) {
+        let mesh = self.resource_pool.get_skeletal_mesh(mesh_handle).unwrap();
+        let animation = self.resource_pool.get_animation(animation_handle).unwrap();
+
+        for bone_info in mesh.bones.iter() {
+            let bone_index = bone_info.id as usize;
+
+            let parent_transform = if bone_info.parent_id != -1 {
+                let parent_bone_index = bone_info.parent_id as usize;
+                Mat4::from_cols_array(&bones[parent_bone_index])
+            } else {
+                Mat4::IDENTITY
+            };
+
+            bones[bone_index] = (parent_transform
+                * animation.frames
+                    [(frame_index % animation.get_frame_count()) * mesh.bones.len() + bone_index]
+                    .to_matrix())
+            .to_data();
+        }
+
+        for bone_info in mesh.bones.iter() {
+            let bone_index = bone_info.id as usize;
+            bones[bone_index] = (Mat4::from_cols_array(&bones[bone_index])
+                * Mat4::from_cols_array(&mesh.bones[bone_index].offset_matrix).transpose())
+            .to_data();
+        }
     }
 
     pub fn submit<T: SubmitJob>(&mut self, job: &T) {

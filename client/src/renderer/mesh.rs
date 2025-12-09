@@ -1,4 +1,3 @@
-use anyhow::Ok;
 use shared::math::Mat4;
 
 use crate::renderer::{Buffer, BufferDesc, RenderDevice};
@@ -51,9 +50,9 @@ impl SkeletalMeshVertex {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BoneInfo {
-    id: u32,
-    parent_id: u32,
-    offset_matrix: [f32; 16],
+    pub id: i32,
+    pub parent_id: i32,
+    pub offset_matrix: [f32; 16],
 }
 
 #[derive(Default)]
@@ -156,7 +155,7 @@ pub struct SkeletalMesh {
     pub vertex_buffer: Buffer,
     pub index_buffer: Buffer,
     pub index_count: u32,
-    pub _bones: Vec<BoneInfo>,
+    pub bones: Vec<BoneInfo>,
 }
 
 impl SkeletalMesh {
@@ -220,7 +219,7 @@ impl RenderDevice {
             vertex_buffer,
             index_buffer,
             index_count: desc.indices.len() as u32,
-            _bones: desc._bones.clone(),
+            bones: desc._bones.clone(),
         })
     }
 }
