@@ -176,7 +176,7 @@ fn load_bones(scene: &Scene) -> BoneMap {
                     name: bone.name(),
                     id: bone_index,
                     parent_id: -1,
-                    offset_matrix: bone.offset_matrix().to_cols_array(),
+                    offset_matrix: bone.offset_matrix().transpose().to_cols_array(),
                 },
             );
 
