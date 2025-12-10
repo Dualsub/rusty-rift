@@ -1,3 +1,5 @@
+use std::ops::Neg;
+
 pub use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub type Mat4Data = [f32; 16];
@@ -23,5 +25,21 @@ impl ToData<Vec4Data> for Vec4 {
 impl ToData<Vec2Data> for Vec2 {
     fn to_data(&self) -> Vec2Data {
         self.to_array()
+    }
+}
+
+pub trait NLerp<T> {
+    fn nlerp(&self, rhs: T, s: f32) -> T;
+}
+
+impl NLerp<Quat> for Quat {
+    fn nlerp(&self, rhs: Quat, s: f32) -> Quat {
+        let mut rhs = rhs;
+        let dot = rhs.dot(*self);
+        if dot < 0.0 {
+            rhs = rhs.neg();
+        }
+
+        self.lerp(rhs, s).normalize()
     }
 }
