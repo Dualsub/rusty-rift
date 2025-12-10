@@ -2,10 +2,13 @@ use std::{collections::HashMap, ops::Range};
 
 use shared::math::*;
 
-use crate::renderer::{DrawData, ResourceHandle, StaticInstanceData, renderer::RenderBatch};
+use crate::renderer::{
+    DrawData, ResourceHandle, ResourcePool, StaticInstanceData, animation::Pose,
+    renderer::RenderBatch,
+};
 
 pub trait SubmitJob {
-    fn submit(&self, render_data: &mut RenderData);
+    fn submit(&self, render_data: &mut RenderData, resource_pool: &ResourcePool);
 }
 
 #[derive(Default)]
@@ -44,7 +47,7 @@ impl Default for StaticRenderJob {
 }
 
 impl SubmitJob for StaticRenderJob {
-    fn submit(&self, render_data: &mut RenderData) {
+    fn submit(&self, render_data: &mut RenderData, _resource_pool: &ResourcePool) {
         let key = BatchKey {
             mesh: self.mesh,
             material: self.material,
@@ -68,7 +71,7 @@ pub struct SkeletalRenderJob<'a> {
     pub color: Vec4,
     pub tex_coord: Vec2,
     pub tex_scale: Vec2,
-    pub bones: &'a [Mat4Data],
+    pub pose: Option<&'a Pose>,
 }
 
 impl Default for SkeletalRenderJob<'_> {
@@ -80,21 +83,36 @@ impl Default for SkeletalRenderJob<'_> {
             color: Vec4::ONE,
             tex_coord: Vec2::ZERO,
             tex_scale: Vec2::ONE,
-            bones: &[],
+            pose: None,
         }
     }
 }
 
 impl SubmitJob for SkeletalRenderJob<'_> {
-    fn submit(&self, render_data: &mut RenderData) {
+    fn submit(&self, render_data: &mut RenderData, _resource_pool: &ResourcePool) {
         let key = BatchKey {
             mesh: self.mesh,
             material: self.material,
         };
 
-        let bone_index = render_data.bones.len() as u32;
-        let mut bones = self.bones.to_vec();
-        render_data.bones.append(&mut bones);
+        let pose = self.pose.expect("Pose was None");
+
+        let bone_index = render_data.bones.len();
+        let bone_count = pose.transforms.len();
+        // Allocate the new bones
+        render_data
+            .bones
+            .resize(bone_index + bone_count, Mat4::IDENTITY.to_data());
+
+        let mesh = _resource_pool
+            .get_skeletal_mesh(self.mesh)
+            .expect("Skeletel mesh was not found");
+
+        // Fill them with the global matrices from the pose
+        mesh.get_bone_matrices(
+            pose,
+            &mut render_data.bones[bone_index..bone_index + bone_count],
+        );
 
         let instanced_job = render_data.skeletal_jobs.entry(key).or_default();
         instanced_job.instances.push(StaticInstanceData {
@@ -102,7 +120,7 @@ impl SubmitJob for SkeletalRenderJob<'_> {
             color: self.color.to_data(),
             tex_coord: self.tex_coord.to_data(),
             tex_scale: self.tex_scale.to_data(),
-            data_indices: [bone_index, 0, 0, 0],
+            data_indices: [bone_index as u32, 0, 0, 0],
         });
     }
 }
@@ -124,8 +142,8 @@ impl RenderData {
         }
     }
 
-    pub fn submit<T: SubmitJob>(&mut self, job: &T) {
-        job.submit(self);
+    pub fn submit<T: SubmitJob>(&mut self, job: &T, resource_pool: &ResourcePool) {
+        job.submit(self, resource_pool);
     }
 
     // NOTE: The instance data from the jobs is moved into the draw data when built, so

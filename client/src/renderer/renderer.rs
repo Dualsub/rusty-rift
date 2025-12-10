@@ -8,6 +8,7 @@ use crate::renderer::{
     Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderData,
     RenderDevice, Resource, ResourceHandle, ResourcePool, SkeletalMeshVertex, StaticInstanceData,
     StaticMeshVertex, Texture, TextureDesc,
+    animation::{AnimationInstance, LocalBoneTransform, Pose},
     render_data::{StaticRenderJob, SubmitJob},
     resources::get_handle,
 };
@@ -906,6 +907,14 @@ impl Renderer {
         handle
     }
 
+    pub fn create_pose(&self, mesh: ResourceHandle) -> Pose {
+        let mesh = self
+            .resource_pool
+            .get_skeletal_mesh(mesh)
+            .expect("Failed to get mesh for creating pose");
+        Pose::new(mesh.bones.len())
+    }
+
     pub fn load_animation(&mut self, name: &'static str, bytes: &[u8]) -> ResourceHandle {
         let handle = get_handle(name);
         let animation = self
@@ -948,56 +957,54 @@ impl Renderer {
         handle
     }
 
-    pub fn get_bone_matrix(
+    pub fn sample_animation(
         &self,
-        mesh_handle: ResourceHandle,
-        animation_handle: ResourceHandle,
-        bone_index: usize,
-        frame_index: usize,
-    ) -> Mat4 {
-        let mesh = self.resource_pool.get_skeletal_mesh(mesh_handle).unwrap();
-        let animation = self.resource_pool.get_animation(animation_handle).unwrap();
-
-        animation.frames[frame_index * mesh.bones.len() + bone_index].to_matrix()
-            * Mat4::from_cols_array(&mesh.bones[bone_index].offset_matrix)
+        animation: ResourceHandle,
+        time: f32,
+        looping: bool,
+        out_pose: &mut Pose,
+    ) -> f32 {
+        let animation = self
+            .resource_pool
+            .get_animation(animation)
+            .expect("Fialed to get animation to sample");
+        animation.sample(time, looping, out_pose)
     }
 
-    pub fn fill_bone_matrix(
-        &self,
-        mesh_handle: ResourceHandle,
-        animation_handle: ResourceHandle,
-        frame_index: usize,
-        bones: &mut [Mat4Data],
-    ) {
-        let mesh = self.resource_pool.get_skeletal_mesh(mesh_handle).unwrap();
-        let animation = self.resource_pool.get_animation(animation_handle).unwrap();
-
-        for bone_info in mesh.bones.iter() {
-            let bone_index = bone_info.id as usize;
-
-            let parent_transform = if bone_info.parent_id != -1 {
-                let parent_bone_index = bone_info.parent_id as usize;
-                Mat4::from_cols_array(&bones[parent_bone_index])
-            } else {
-                Mat4::IDENTITY
-            };
-
-            bones[bone_index] = (parent_transform
-                * animation.frames
-                    [(frame_index % animation.get_frame_count()) * mesh.bones.len() + bone_index]
-                    .to_matrix())
-            .to_data();
+    pub fn accumulate_pose(&self, instances: &[AnimationInstance], out_pose: &mut Pose) {
+        if instances.is_empty() {
+            return;
         }
 
-        for bone_info in mesh.bones.iter() {
-            let bone_index = bone_info.id as usize;
-            bones[bone_index] = (Mat4::from_cols_array(&bones[bone_index])
-                * Mat4::from_cols_array(&mesh.bones[bone_index].offset_matrix).transpose())
-            .to_data();
+        let mut total_weight = 0.0;
+        out_pose.transforms.fill(Default::default());
+
+        // First instance
+        if let Some(instance) = instances.first() {
+            let animation = self
+                .resource_pool
+                .get_animation(instance.animation)
+                .expect("Could not find animation for instance");
+            animation.sample(instance.time, instance.looping, out_pose);
+            total_weight = instance.blend_weight;
+        }
+
+        if instances.len() <= 1 {
+            return;
+        }
+
+        for instance in &instances[1..instances.len()] {
+            total_weight += instance.blend_weight;
+            let instance_weight = (instance.blend_weight / total_weight).clamp(0.0, 1.0);
+            let animation = self
+                .resource_pool
+                .get_animation(instance.animation)
+                .expect("Could not find animation for instance");
+            animation.sample_and_blend(instance.time, instance.looping, instance_weight, out_pose);
         }
     }
 
     pub fn submit<T: SubmitJob>(&mut self, job: &T) {
-        self.render_data.submit(job);
+        self.render_data.submit(job, &self.resource_pool);
     }
 }
