@@ -11,10 +11,13 @@
     - [x] Static mesh rendering
     - [x] Shadow mapping
     - [x] Skeletal animation
+    - [x] Simple PBR:ish
 
 ### Phase 2
 
-- Game entities setup
+- [ ] Game entities setup
+- [ ] Simple character movement
+- [ ] Very simple UI rendering
 
 ### Phase 3
 
@@ -25,6 +28,5 @@
 ### Phase 4
 
 - Nicer rendering feratures
-    - [ ] Simple PBR?
     - [ ] Particles
     - [ ] Bloom

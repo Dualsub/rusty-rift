@@ -125,10 +125,10 @@ impl Game {
         {
             let camera_target = glam::vec3(0.0, 120.0, 0.0);
 
-            // const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
-            // const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
-            const CAMERA_RADIUS: f32 = 300.0_f32;
-            const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
+            const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
+            const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
+            // const CAMERA_RADIUS: f32 = 300.0_f32;
+            // const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
 
             let camera_position = camera_target
                 + Vec3 {
