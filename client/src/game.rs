@@ -2,27 +2,30 @@ use glam::{Quat, Vec3};
 use shared::math::*;
 
 use crate::renderer::{
-    Renderer, StaticRenderJob, render_data::SkeletalRenderJob, resources::get_handle,
+    Renderer, StaticRenderJob,
+    animation::{AnimationInstance, Pose},
+    render_data::SkeletalRenderJob,
+    resources::get_handle,
 };
 
 pub struct Game {
     turn: f32,
-    bones: Vec<Mat4Data>,
-    animation_frame_accumulator: f32,
+    pose: Pose,
+    animation_time: f32,
 }
 
 impl Game {
     pub fn new() -> Self {
         Self {
             turn: 0.0,
-            bones: vec![Mat4::IDENTITY.to_data(); 72],
-            animation_frame_accumulator: 0.0,
+            pose: Pose::new(0),
+            animation_time: 0.0,
         }
     }
 
     pub fn update(&mut self, dt: f32) {
         self.turn += 0.0 * dt;
-        self.animation_frame_accumulator += dt * 60.0;
+        self.animation_time += dt;
     }
 
     pub fn load_resources(&mut self, renderer: &mut Renderer) {
@@ -36,10 +39,13 @@ impl Game {
             ),
         );
 
-        renderer.load_skeletal_mesh(
+        let mesh = renderer.load_skeletal_mesh(
             "Brute",
             include_bytes!("../../assets/champions/brute/Brute.dat"),
         );
+
+        self.pose = renderer.create_pose(mesh);
+
         renderer.load_animation(
             "Brute_Idle",
             include_bytes!("../../assets/champions/brute/animations/Brute_Idle.dat"),
@@ -52,11 +58,24 @@ impl Game {
     }
 
     pub fn render(&mut self, renderer: &mut Renderer) {
-        renderer.fill_bone_matrix(
-            get_handle("Brute"),
-            get_handle("Brute_Idle"),
-            self.animation_frame_accumulator as usize,
-            &mut self.bones,
+        let blend = (self.animation_time).sin() * 0.5 + 0.5;
+
+        renderer.accumulate_pose(
+            &[
+                AnimationInstance {
+                    animation: get_handle("Brute_Idle"),
+                    blend_weight: blend,
+                    time: self.animation_time,
+                    looping: true,
+                },
+                AnimationInstance {
+                    animation: get_handle("Brute_Run"),
+                    blend_weight: 1.0 - blend,
+                    time: self.animation_time,
+                    looping: true,
+                },
+            ],
+            &mut self.pose,
         );
 
         renderer.submit(&SkeletalRenderJob {
@@ -64,13 +83,8 @@ impl Game {
                 * Mat4::from_rotation_z(-self.turn),
             material: get_handle("BruteMaterial"),
             mesh: get_handle("Brute"),
-            color: Vec4 {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0,
-                w: 1.0,
-            },
-            bones: &self.bones,
+            pose: Some(&self.pose),
+            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
             ..Default::default()
         });
 
@@ -111,10 +125,10 @@ impl Game {
         {
             let camera_target = glam::vec3(0.0, 120.0, 0.0);
 
-            const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
-            const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
-            // const CAMERA_RADIUS: f32 = 600.0_f32;
-            // const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
+            // const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
+            // const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
+            const CAMERA_RADIUS: f32 = 300.0_f32;
+            const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
 
             let camera_position = camera_target
                 + Vec3 {
