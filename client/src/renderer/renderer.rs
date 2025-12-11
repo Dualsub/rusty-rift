@@ -799,10 +799,12 @@ impl Renderer {
         self.camera_transform.rotation = orientation;
     }
 
-    pub fn _set_lighting_color(&mut self, color: Vec3) {
+    #[allow(dead_code)]
+    pub fn set_lighting_color(&mut self, color: Vec3) {
         self.uniform_data.light_color = [color.x, color.y, color.z, 1.0];
     }
 
+    #[allow(dead_code)]
     pub fn set_lighting_direction(&mut self, direction: Vec3) {
         self.uniform_data.light_direction = [direction.x, direction.y, direction.z, 0.0];
     }
@@ -957,7 +959,8 @@ impl Renderer {
         handle
     }
 
-    pub fn _sample_animation(
+    #[allow(dead_code)]
+    pub fn sample_animation(
         &self,
         animation: ResourceHandle,
         time: f32,
@@ -971,6 +974,7 @@ impl Renderer {
         animation.sample(time, looping, out_pose)
     }
 
+    #[allow(dead_code)]
     pub fn accumulate_pose(&self, instances: &[AnimationInstance], out_pose: &mut Pose) {
         if instances.is_empty() {
             return;

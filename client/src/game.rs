@@ -4,12 +4,7 @@ use shared::{
     physics::{BodyId, BodySettings, BodyState, CollisionLayer, CollisionShape, PhysicsWorld},
 };
 
-use crate::renderer::{
-    Renderer, StaticRenderJob,
-    animation::{AnimationInstance, Pose},
-    render_data::SkeletalRenderJob,
-    resources::get_handle,
-};
+use crate::renderer::{Renderer, StaticRenderJob, animation::Pose, resources::get_handle};
 
 const SPHERE_COUNT: usize = 32;
 const BASE_RADIUS: f32 = 30.0;

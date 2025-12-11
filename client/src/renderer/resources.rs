@@ -105,6 +105,7 @@ impl ResourcePool {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_animation(&self, handle: ResourceHandle) -> Option<&Animation> {
         match self.get_resource(handle) {
             Some(resource) => match resource {

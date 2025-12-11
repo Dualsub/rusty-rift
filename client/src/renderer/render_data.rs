@@ -64,6 +64,7 @@ impl SubmitJob for StaticRenderJob {
     }
 }
 
+#[allow(dead_code)]
 pub struct SkeletalRenderJob<'a> {
     pub transform: Mat4,
     pub material: ResourceHandle,

@@ -10,6 +10,7 @@ pub struct LocalBoneTransform {
 }
 
 impl LocalBoneTransform {
+    #[allow(dead_code)]
     pub fn to_matrix(&self) -> Mat4 {
         Mat4::from_rotation_translation(self.rotation, self.position)
     }
@@ -35,6 +36,7 @@ impl Pose {
         Self { transforms }
     }
 
+    #[allow(dead_code)]
     pub fn get_matrix(&self, bone_index: usize) -> Mat4 {
         self.transforms[bone_index].to_matrix()
     }
@@ -56,6 +58,7 @@ impl Pose {
 }
 
 impl SkeletalMesh {
+    #[allow(dead_code)]
     pub fn get_bone_matrices(&self, pose: &Pose, out_matrices: &mut [Mat4Data]) {
         // First pass: Calculate hierachy. Since the bones are in topological order,
         // the parent will always be calculated before the children.
@@ -88,18 +91,22 @@ pub struct Animation {
 }
 
 impl Animation {
+    #[allow(dead_code)]
     pub fn get_frame_count(&self) -> usize {
         self.times.len()
     }
 
+    #[allow(dead_code)]
     pub fn get_bone_count(&self) -> usize {
         self.frames.len() / self.get_frame_count()
     }
 
+    #[allow(dead_code)]
     pub fn get_duration(&self) -> f32 {
         self.times.last().cloned().unwrap_or(0.0)
     }
 
+    #[allow(dead_code)]
     // Sample and return the new time
     pub fn sample(&self, time: f32, looping: bool, out_pose: &mut Pose) -> f32 {
         let mut t = time;
@@ -141,6 +148,7 @@ impl Animation {
         t
     }
 
+    #[allow(dead_code)]
     // Sample and return the new time
     pub fn sample_and_blend(
         &self,
@@ -193,6 +201,7 @@ impl Animation {
     }
 }
 
+#[allow(dead_code)]
 pub struct AnimationInstance {
     pub animation: ResourceHandle,
     pub time: f32,
