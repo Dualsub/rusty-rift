@@ -1,5 +1,8 @@
 use glam::{Quat, Vec3};
-use shared::math::*;
+use shared::{
+    math::*,
+    physics::{BodyId, BodySettings, BodyState, CollisionShape, PhysicsWorld},
+};
 
 use crate::renderer::{
     Renderer, StaticRenderJob,
@@ -8,10 +11,22 @@ use crate::renderer::{
     resources::get_handle,
 };
 
+const SPHERE_COUNT: usize = 32;
+const SPHERE_RADIUS: f32 = 30.0;
+
+fn random_range(seed: &mut u32, min: f32, max: f32) -> f32 {
+    *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+    let t = (*seed as f32) / (u32::MAX as f32);
+    min + (max - min) * t
+}
+
 pub struct Game {
     turn: f32,
     pose: Pose,
     animation_time: f32,
+
+    sphere_ids: Vec<BodyId>,
+    sphere_states: Vec<Option<BodyState>>,
 }
 
 impl Game {
@@ -20,17 +35,56 @@ impl Game {
             turn: 0.0,
             pose: Pose::new(0),
             animation_time: 0.0,
+            sphere_ids: Vec::new(),
+            sphere_states: Vec::new(),
         }
     }
 
-    pub fn update(&mut self, dt: f32) {
-        self.turn += 0.0 * dt;
-        self.animation_time += dt;
+    pub fn initialize(&mut self, physics_world: &mut PhysicsWorld) {
+        self.sphere_ids.clear();
+        self.sphere_states.clear();
+
+        let mut seed: u32 = 0x1234_5678;
+        let center = Vec2::ZERO;
+
+        for _ in 0..SPHERE_COUNT {
+            let position = Vec2::new(
+                random_range(&mut seed, -400.0, 400.0),
+                random_range(&mut seed, -400.0, 400.0),
+            );
+
+            let to_center = center - position;
+
+            let speed = random_range(&mut seed, 50.0, 1500.0);
+
+            let velocity = if to_center.length_squared() > 0.0001 {
+                to_center.normalize() * speed
+            } else {
+                Vec2::new(0.0, speed)
+            };
+
+            let body_id = physics_world.create_rigid_body(&BodySettings {
+                position,
+                velocity,
+                shape: &CollisionShape::Circle {
+                    radius: SPHERE_RADIUS,
+                },
+            });
+
+            self.sphere_ids.push(body_id);
+            self.sphere_states.push(None);
+        }
+
+        log::info!(
+            "Initialized {} spheres (toward center)",
+            self.sphere_ids.len()
+        );
     }
 
     pub fn load_resources(&mut self, renderer: &mut Renderer) {
         renderer.create_material("Grid", include_bytes!("../../assets/textures/grid.dat"));
         renderer.load_mesh("Floor", include_bytes!("../../assets/models/floor.dat"));
+        renderer.load_mesh("Sphere", include_bytes!("../../assets/models/sphere.dat"));
 
         renderer.create_material(
             "BruteMaterial",
@@ -57,36 +111,31 @@ impl Game {
         );
     }
 
+    pub fn update(&mut self, dt: f32) {
+        self.turn += 0.0 * dt;
+        self.animation_time += dt;
+    }
+
+    pub fn fixed_update(&mut self, dt: f32, physics_world: &mut PhysicsWorld) {
+        physics_world.step_simulation(dt);
+
+        for (index, body_id) in self.sphere_ids.iter().enumerate() {
+            self.sphere_states[index] = physics_world.get_state(*body_id);
+        }
+    }
+
     pub fn render(&mut self, renderer: &mut Renderer) {
-        let blend = (self.animation_time).sin() * 0.5 + 0.5;
-
-        renderer.accumulate_pose(
-            &[
-                AnimationInstance {
-                    animation: get_handle("Brute_Idle"),
-                    blend_weight: blend,
-                    time: self.animation_time,
-                    looping: true,
-                },
-                AnimationInstance {
-                    animation: get_handle("Brute_Run"),
-                    blend_weight: 1.0 - blend,
-                    time: self.animation_time,
-                    looping: true,
-                },
-            ],
-            &mut self.pose,
-        );
-
-        renderer.submit(&SkeletalRenderJob {
-            transform: Mat4::from_rotation_x(-90.0_f32.to_radians())
-                * Mat4::from_rotation_z(-self.turn),
-            material: get_handle("BruteMaterial"),
-            mesh: get_handle("Brute"),
-            pose: Some(&self.pose),
-            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
-            ..Default::default()
-        });
+        for state in &self.sphere_states {
+            if let Some(body_state) = state {
+                renderer.submit(&StaticRenderJob {
+                    transform: Mat4::from_translation(body_state.position.at_y(100.0))
+                        * Mat4::from_scale(Vec3::ONE * SPHERE_RADIUS),
+                    mesh: get_handle("Sphere"),
+                    material: get_handle("Grid"),
+                    ..Default::default()
+                });
+            }
+        }
 
         renderer.submit(&StaticRenderJob {
             transform: Mat4::from_scale_rotation_translation(
@@ -109,26 +158,12 @@ impl Game {
             ..Default::default()
         });
 
-        // Lighting
-        {
-            renderer.set_lighting_direction(
-                Vec3 {
-                    x: 0.0, //self.turn.sin(),
-                    y: -2.0,
-                    z: 0.0, //self.turn.cos(),
-                }
-                .normalize(),
-            );
-        }
-
         // Camera
         {
             let camera_target = glam::vec3(0.0, 120.0, 0.0);
 
             const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
             const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
-            // const CAMERA_RADIUS: f32 = 500.0_f32;
-            // const CAMERA_ANGLE: f32 = f32::to_radians(30.0);
 
             let camera_position = camera_target
                 + Vec3 {
