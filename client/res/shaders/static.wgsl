@@ -13,6 +13,7 @@ struct Instance {
     model_matrix: mat4x4<f32>,
     color: vec4<f32>,
     tex_bounds: vec4<f32>,
+    data_indices: vec4<u32>,
 }
 
 struct VertexInput {
