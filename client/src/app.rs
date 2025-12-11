@@ -12,13 +12,16 @@ use winit::{
 
 use crate::game::Game;
 use crate::renderer::Renderer;
+use shared::physics::PhysicsWorld;
 
 pub struct State {
     pub window: Arc<Window>,
     pub renderer: Renderer,
+    pub physics_world: PhysicsWorld,
     pub game: Game,
 
     pub previous_time: f64,
+    pub time_since_fixed: f32,
 }
 
 fn get_time() -> f64 {
@@ -28,16 +31,22 @@ fn get_time() -> f64 {
 }
 
 impl State {
+    const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
+
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let mut renderer = Renderer::new(&window).await?;
+        let mut physics_world = PhysicsWorld::new();
         let mut game = Game::new();
+        game.initialize(&mut physics_world);
         game.load_resources(&mut renderer);
 
         Ok(Self {
             window,
             renderer,
+            physics_world,
             game,
             previous_time: get_time(),
+            time_since_fixed: 0.0,
         })
     }
 
@@ -47,6 +56,10 @@ impl State {
 
     pub fn update(&mut self, dt: f32) {
         self.game.update(dt);
+    }
+
+    pub fn fixed_update(&mut self, dt: f32) {
+        self.game.fixed_update(dt, &mut self.physics_world);
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -152,8 +165,14 @@ impl ApplicationHandler<State> for App {
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 let now = get_time();
-                let dt = (now - state.previous_time) as f32;
+                let dt = (now - state.previous_time).clamp(0.0, 1.0 / 10.0) as f32; // We clamp it to prevent instability
                 state.previous_time = now;
+
+                state.time_since_fixed += dt;
+                while state.time_since_fixed > State::FIXED_TIMESTEP {
+                    state.fixed_update(State::FIXED_TIMESTEP);
+                    state.time_since_fixed -= State::FIXED_TIMESTEP;
+                }
 
                 state.update(dt);
 
