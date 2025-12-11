@@ -191,6 +191,7 @@ impl RenderData {
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.static_jobs.clear();
     }

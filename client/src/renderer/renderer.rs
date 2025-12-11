@@ -8,8 +8,8 @@ use crate::renderer::{
     Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderData,
     RenderDevice, Resource, ResourceHandle, ResourcePool, SkeletalMeshVertex, StaticInstanceData,
     StaticMeshVertex, Texture, TextureDesc,
-    animation::{AnimationInstance, LocalBoneTransform, Pose},
-    render_data::{StaticRenderJob, SubmitJob},
+    animation::{AnimationInstance, Pose},
+    render_data::SubmitJob,
     resources::get_handle,
 };
 
@@ -799,7 +799,7 @@ impl Renderer {
         self.camera_transform.rotation = orientation;
     }
 
-    pub fn set_lighting_color(&mut self, color: Vec3) {
+    pub fn _set_lighting_color(&mut self, color: Vec3) {
         self.uniform_data.light_color = [color.x, color.y, color.z, 1.0];
     }
 
@@ -957,7 +957,7 @@ impl Renderer {
         handle
     }
 
-    pub fn sample_animation(
+    pub fn _sample_animation(
         &self,
         animation: ResourceHandle,
         time: f32,

@@ -4,6 +4,7 @@ use crate::renderer::{
     Animation, MaterialInstance, MaterialPipeline, MeshDrawInfo, SkeletalMesh, StaticMesh, Texture,
 };
 
+#[allow(dead_code)]
 pub enum Resource {
     StaticMesh(StaticMesh),
     SkeletalMesh(SkeletalMesh),
@@ -51,6 +52,7 @@ impl ResourcePool {
         self.resources.get(&handle)
     }
 
+    #[allow(dead_code)]
     pub fn get_material_pipeline(&self, handle: ResourceHandle) -> Option<&MaterialPipeline> {
         match self.get_resource(handle) {
             Some(resource) => match resource {
@@ -71,6 +73,7 @@ impl ResourcePool {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_mesh(&self, handle: ResourceHandle) -> Option<&StaticMesh> {
         match self.get_resource(handle) {
             Some(resource) => match resource {

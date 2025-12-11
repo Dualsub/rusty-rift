@@ -39,6 +39,7 @@ impl Pose {
         self.transforms[bone_index].to_matrix()
     }
 
+    #[allow(dead_code)]
     pub fn blend(a: &Pose, b: &Pose, alpha: f32, out: &mut Pose) {
         assert_eq!(a.transforms.len(), out.transforms.len());
         assert_eq!(b.transforms.len(), out.transforms.len());

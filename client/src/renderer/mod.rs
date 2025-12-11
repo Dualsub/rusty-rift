@@ -11,7 +11,7 @@ pub use texture::{Texture, TextureDesc};
 pub mod mesh;
 pub use mesh::{MeshDrawInfo, SkeletalMesh, SkeletalMeshVertex, StaticMesh, StaticMeshVertex};
 pub mod animation;
-pub use animation::{Animation, AnimationLoadDesc};
+pub use animation::Animation;
 pub mod device;
 pub use device::RenderDevice;
 pub mod instance_data;
