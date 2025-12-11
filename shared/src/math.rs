@@ -43,3 +43,13 @@ impl NLerp<Quat> for Quat {
         self.lerp(rhs, s).normalize()
     }
 }
+
+pub trait Vec2To3 {
+    fn at_y(&self, y: f32) -> Vec3;
+}
+
+impl Vec2To3 for Vec2 {
+    fn at_y(&self, y: f32) -> Vec3 {
+        Vec3::new(self.x, y, self.y)
+    }
+}

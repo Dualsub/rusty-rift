@@ -28,6 +28,10 @@ impl<T> Pool<T> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.elements.len() - self.free_slots.len()
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             elements: Vec::with_capacity(capacity),
