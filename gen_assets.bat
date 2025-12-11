@@ -1,3 +1,4 @@
+cargo run -p tools -- mesh .\assets\models\sphere.FBX -o .\assets\models\sphere.dat
 cargo run -p tools -- mesh .\assets\champions\brute\Brute.FBX -s .\assets\champions\brute\brute.json -o .\assets\champions\brute\Brute.dat
 cargo run -p tools -- texture .\assets\champions\brute\textures\MaleBruteA_Body_diffuse1_ncl1_1.PNG -o .\assets\champions\brute\textures\MaleBruteA_Body_diffuse1_ncl1_1.dat
 cargo run -p tools -- animation .\assets\champions\brute\animations\Brute_Idle.FBX -s .\assets\champions\brute\brute.json -o .\assets\champions\brute\animations\Brute_Idle.dat
