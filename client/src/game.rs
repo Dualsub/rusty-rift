@@ -1,7 +1,7 @@
 use glam::{Quat, Vec3};
 use shared::{
     math::*,
-    physics::{BodyId, BodySettings, BodyState, CollisionShape, PhysicsWorld},
+    physics::{BodyId, BodySettings, BodyState, CollisionLayer, CollisionShape, PhysicsWorld},
 };
 
 use crate::renderer::{
@@ -12,7 +12,7 @@ use crate::renderer::{
 };
 
 const SPHERE_COUNT: usize = 32;
-const SPHERE_RADIUS: f32 = 30.0;
+const BASE_RADIUS: f32 = 30.0;
 
 fn random_range(seed: &mut u32, min: f32, max: f32) -> f32 {
     *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -27,6 +27,8 @@ pub struct Game {
 
     sphere_ids: Vec<BodyId>,
     sphere_states: Vec<Option<BodyState>>,
+    sphere_layers: Vec<CollisionLayer>,
+    sphere_radii: Vec<f32>,
 }
 
 impl Game {
@@ -37,17 +39,38 @@ impl Game {
             animation_time: 0.0,
             sphere_ids: Vec::new(),
             sphere_states: Vec::new(),
+            sphere_layers: Vec::new(),
+            sphere_radii: Vec::new(),
         }
     }
 
     pub fn initialize(&mut self, physics_world: &mut PhysicsWorld) {
         self.sphere_ids.clear();
         self.sphere_states.clear();
+        self.sphere_layers.clear();
+        self.sphere_radii.clear();
 
         let mut seed: u32 = 0x1234_5678;
         let center = Vec2::ZERO;
 
-        for _ in 0..SPHERE_COUNT {
+        let layer_sequence = [
+            CollisionLayer::Player,
+            CollisionLayer::Enemy,
+            CollisionLayer::PlayerProjectile,
+            CollisionLayer::EnemyProjectile,
+        ];
+
+        for i in 0..SPHERE_COUNT {
+            let layer = layer_sequence[i % layer_sequence.len()];
+
+            let radius = match layer {
+                CollisionLayer::Player => BASE_RADIUS * 1.2,
+                CollisionLayer::Enemy => BASE_RADIUS * 1.2,
+                CollisionLayer::PlayerProjectile => BASE_RADIUS * 0.6,
+                CollisionLayer::EnemyProjectile => BASE_RADIUS * 0.6,
+                CollisionLayer::Environment => BASE_RADIUS * 1.8,
+            };
+
             let position = Vec2::new(
                 random_range(&mut seed, -400.0, 400.0),
                 random_range(&mut seed, -400.0, 400.0),
@@ -55,7 +78,15 @@ impl Game {
 
             let to_center = center - position;
 
-            let speed = random_range(&mut seed, 50.0, 1500.0);
+            let (speed_min, speed_max) = match layer {
+                CollisionLayer::Player | CollisionLayer::Enemy => (150.0, 450.0),
+                CollisionLayer::PlayerProjectile | CollisionLayer::EnemyProjectile => {
+                    (600.0, 1200.0)
+                }
+                CollisionLayer::Environment => (0.0, 0.0),
+            };
+
+            let speed = random_range(&mut seed, speed_min, speed_max);
 
             let velocity = if to_center.length_squared() > 0.0001 {
                 to_center.normalize() * speed
@@ -66,17 +97,19 @@ impl Game {
             let body_id = physics_world.create_rigid_body(&BodySettings {
                 position,
                 velocity,
-                shape: &CollisionShape::Circle {
-                    radius: SPHERE_RADIUS,
-                },
+                layer,
+                shape: &CollisionShape::Circle { radius },
+                listen_to_contact_events: true,
             });
 
             self.sphere_ids.push(body_id);
             self.sphere_states.push(None);
+            self.sphere_layers.push(layer);
+            self.sphere_radii.push(radius);
         }
 
         log::info!(
-            "Initialized {} spheres (toward center)",
+            "Initialized {} spheres (toward center, mixed layers)",
             self.sphere_ids.len()
         );
     }
@@ -124,14 +157,29 @@ impl Game {
         }
     }
 
+    fn layer_color(layer: CollisionLayer) -> glam::Vec4 {
+        match layer {
+            CollisionLayer::Player => glam::Vec4::new(0.2, 0.4, 1.0, 1.0),
+            CollisionLayer::Enemy => glam::Vec4::new(1.0, 0.25, 0.25, 1.0),
+            CollisionLayer::PlayerProjectile => glam::Vec4::new(0.2, 1.0, 0.8, 1.0),
+            CollisionLayer::EnemyProjectile => glam::Vec4::new(1.0, 0.7, 0.2, 1.0),
+            CollisionLayer::Environment => glam::Vec4::new(0.5, 0.5, 0.5, 1.0),
+        }
+    }
+
     pub fn render(&mut self, renderer: &mut Renderer) {
-        for state in &self.sphere_states {
+        for (index, state) in self.sphere_states.iter().enumerate() {
             if let Some(body_state) = state {
+                let layer = self.sphere_layers[index];
+                let radius = self.sphere_radii[index];
+                let color = Self::layer_color(layer);
+
                 renderer.submit(&StaticRenderJob {
                     transform: Mat4::from_translation(body_state.position.at_y(100.0))
-                        * Mat4::from_scale(Vec3::ONE * SPHERE_RADIUS),
+                        * Mat4::from_scale(Vec3::ONE * radius),
                     mesh: get_handle("Sphere"),
                     material: get_handle("Grid"),
+                    color,
                     ..Default::default()
                 });
             }
