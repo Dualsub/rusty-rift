@@ -15,17 +15,22 @@
 
 ### Phase 2
 
+- Simple physics engine
+    - [ ] Sphere on sphere collision and simulation 
+
+### Phase 3
+
 - [ ] Game entities setup
 - [ ] Simple character movement
 - [ ] Very simple UI rendering
 
-### Phase 3
+### Phase 4
 
 - Simple networking
     - [ ] Client server communication
     - [ ] Simple data layer
 
-### Phase 4
+### Phase 5
 
 - Nicer rendering feratures
     - [ ] Particles
