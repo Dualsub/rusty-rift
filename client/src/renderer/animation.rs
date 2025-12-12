@@ -25,6 +25,7 @@ impl Default for LocalBoneTransform {
     }
 }
 
+#[derive(Default)]
 pub struct Pose {
     pub transforms: Vec<LocalBoneTransform>,
 }
@@ -202,6 +203,7 @@ impl Animation {
 }
 
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct AnimationInstance {
     pub animation: ResourceHandle,
     pub time: f32,
