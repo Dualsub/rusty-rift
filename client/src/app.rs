@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Mul, sync::Arc};
 
 use glam::Vec2;
 #[cfg(target_arch = "wasm32")]
@@ -60,8 +60,8 @@ impl State {
         self.renderer.resize(width, height);
     }
 
-    pub fn update(&mut self, dt: f32) {
-        self.game.update(dt, &self.input_state);
+    pub fn update(&mut self, dt: f32, alpha: f32) {
+        self.game.update(dt, alpha, &self.input_state);
     }
 
     pub fn fixed_update(&mut self, dt: f32) {
@@ -179,7 +179,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 let now = get_time();
-                let dt = (now - state.previous_time).clamp(0.0, 1.0 / 10.0) as f32; // We clamp it to prevent instability
+                let dt = (now - state.previous_time).clamp(0.0, 1.0 / 10.0).mul(1.0) as f32; // We clamp it to prevent instability
                 state.previous_time = now;
 
                 state.time_since_fixed += dt;
@@ -188,7 +188,8 @@ impl ApplicationHandler<State> for App {
                     state.time_since_fixed -= State::FIXED_TIMESTEP;
                 }
 
-                state.update(dt);
+                let alpha = (state.time_since_fixed / State::FIXED_TIMESTEP).clamp(0.0, 1.0);
+                state.update(dt, alpha);
 
                 match state.render() {
                     Ok(_) => {}

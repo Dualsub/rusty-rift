@@ -139,14 +139,16 @@ impl Game {
         );
     }
 
-    pub fn update(&mut self, dt: f32, input_state: &InputState) {
+    pub fn update(&mut self, dt: f32, alpha: f32, input_state: &InputState) {
         // Player
         {
             let transform = &mut self.player.transform;
             let physics_proxy = &mut self.player.physics_proxy;
 
-            if let Some(state) = physics_proxy.current_state {
-                transform.position = state.position.at_y(0.0);
+            if let Some(state) = physics_proxy.current_state
+                && let Some(prev_state) = physics_proxy.previous_state
+            {
+                transform.position = prev_state.position.lerp(state.position, alpha).at_y(0.0);
             }
 
             let movement = &mut self.player.movement;
