@@ -1,112 +1,112 @@
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec3, Vec3Swizzles};
 use shared::{
     math::*,
     physics::{BodyId, BodySettings, BodyState, CollisionLayer, CollisionShape, PhysicsWorld},
+    transform::Transform,
 };
 
-use crate::renderer::{Renderer, StaticRenderJob, animation::Pose, resources::get_handle};
+use crate::{
+    input::{InputAction, InputState},
+    renderer::{
+        Renderer, ResourceHandle, StaticRenderJob,
+        animation::{AnimationInstance, Pose},
+        render_data::SkeletalRenderJob,
+        resources::get_handle,
+    },
+};
 
-const SPHERE_COUNT: usize = 32;
-const BASE_RADIUS: f32 = 30.0;
+type CTransform = Transform;
 
-fn random_range(seed: &mut u32, min: f32, max: f32) -> f32 {
-    *seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-    let t = (*seed as f32) / (u32::MAX as f32);
-    min + (max - min) * t
+struct CRenderable {
+    pub mesh: ResourceHandle,
+    pub material: ResourceHandle,
+    pub render_offset: Mat4,
+    pub color: Vec4,
+    pub tex_coord: Vec2,
+    pub tex_scale: Vec2,
+}
+
+impl Default for CRenderable {
+    fn default() -> Self {
+        Self {
+            mesh: Default::default(),
+            material: Default::default(),
+            render_offset: Mat4::IDENTITY,
+            color: Vec4::ONE,
+            tex_coord: Vec2::ZERO,
+            tex_scale: Vec2::ONE,
+        }
+    }
+}
+
+#[derive(Default)]
+struct CAnimator {
+    pub pose: Pose,
+    pub animation_states: [AnimationInstance; 2],
+    pub time: f32,
+}
+
+#[derive(Default)]
+struct CPhysicsProxy {
+    pub body_id: Option<BodyId>,
+    pub current_state: Option<BodyState>,
+    pub previous_state: Option<BodyState>,
+}
+
+#[derive(Default)]
+struct CPlayerMovement {
+    pub velocity: Vec3,
+}
+
+#[derive(Default)]
+struct EPlayer {
+    pub transform: CTransform,
+    pub physics_proxy: CPhysicsProxy,
+    pub renderable: CRenderable,
+    pub animator: CAnimator,
+    pub movement: CPlayerMovement,
 }
 
 pub struct Game {
-    turn: f32,
-    pose: Pose,
-    animation_time: f32,
-
-    sphere_ids: Vec<BodyId>,
-    sphere_states: Vec<Option<BodyState>>,
-    sphere_layers: Vec<CollisionLayer>,
-    sphere_radii: Vec<f32>,
+    player: EPlayer,
 }
 
 impl Game {
     pub fn new() -> Self {
         Self {
-            turn: 0.0,
-            pose: Pose::new(0),
-            animation_time: 0.0,
-            sphere_ids: Vec::new(),
-            sphere_states: Vec::new(),
-            sphere_layers: Vec::new(),
-            sphere_radii: Vec::new(),
+            player: Default::default(),
         }
     }
 
     pub fn initialize(&mut self, physics_world: &mut PhysicsWorld) {
-        self.sphere_ids.clear();
-        self.sphere_states.clear();
-        self.sphere_layers.clear();
-        self.sphere_radii.clear();
-
-        let mut seed: u32 = 0x1234_5678;
-        let center = Vec2::ZERO;
-
-        let layer_sequence = [
-            CollisionLayer::Player,
-            CollisionLayer::Enemy,
-            CollisionLayer::PlayerProjectile,
-            CollisionLayer::EnemyProjectile,
-        ];
-
-        for i in 0..SPHERE_COUNT {
-            let layer = layer_sequence[i % layer_sequence.len()];
-
-            let radius = match layer {
-                CollisionLayer::Player => BASE_RADIUS * 1.2,
-                CollisionLayer::Enemy => BASE_RADIUS * 1.2,
-                CollisionLayer::PlayerProjectile => BASE_RADIUS * 0.6,
-                CollisionLayer::EnemyProjectile => BASE_RADIUS * 0.6,
-                CollisionLayer::Environment => BASE_RADIUS * 1.8,
-            };
-
-            let position = Vec2::new(
-                random_range(&mut seed, -400.0, 400.0),
-                random_range(&mut seed, -400.0, 400.0),
-            );
-
-            let to_center = center - position;
-
-            let (speed_min, speed_max) = match layer {
-                CollisionLayer::Player | CollisionLayer::Enemy => (150.0, 450.0),
-                CollisionLayer::PlayerProjectile | CollisionLayer::EnemyProjectile => {
-                    (600.0, 1200.0)
-                }
-                CollisionLayer::Environment => (0.0, 0.0),
-            };
-
-            let speed = random_range(&mut seed, speed_min, speed_max);
-
-            let velocity = if to_center.length_squared() > 0.0001 {
-                to_center.normalize() * speed
-            } else {
-                Vec2::new(0.0, speed)
-            };
-
-            let body_id = physics_world.create_rigid_body(&BodySettings {
-                position,
-                velocity,
-                layer,
-                shape: &CollisionShape::Circle { radius },
-                listen_to_contact_events: true,
-            });
-
-            self.sphere_ids.push(body_id);
-            self.sphere_states.push(None);
-            self.sphere_layers.push(layer);
-            self.sphere_radii.push(radius);
+        let player_position = Vec3::new(0.0, 0.0, 0.0);
+        let player_body_id = physics_world.create_rigid_body(&BodySettings {
+            position: player_position.xz(),
+            velocity: Vec2::ZERO,
+            layer: CollisionLayer::Player,
+            shape: &CollisionShape::Circle { radius: 32.0 },
+            listen_to_contact_events: true,
+        });
+        let current_state = physics_world.get_state(player_body_id);
+        self.player = EPlayer {
+            transform: CTransform {
+                position: player_position,
+                ..Default::default()
+            },
+            physics_proxy: CPhysicsProxy {
+                body_id: Some(player_body_id),
+                current_state: current_state,
+                previous_state: current_state,
+            },
+            renderable: CRenderable {
+                mesh: get_handle("Brute"),
+                material: get_handle("BruteMaterial"),
+                render_offset: Mat4::from_rotation_x(-90.0_f32.to_radians()),
+                ..Default::default()
+            },
+            animator: Default::default(),
+            ..Default::default()
         }
-
-        log::info!(
-            "Initialized {} spheres (toward center, mixed layers)",
-            self.sphere_ids.len()
-        );
     }
 
     pub fn load_resources(&mut self, renderer: &mut Renderer) {
@@ -126,7 +126,7 @@ impl Game {
             include_bytes!("../../assets/champions/brute/Brute.dat"),
         );
 
-        self.pose = renderer.create_pose(mesh);
+        self.player.animator.pose = renderer.create_pose(mesh);
 
         renderer.load_animation(
             "Brute_Idle",
@@ -139,47 +139,69 @@ impl Game {
         );
     }
 
-    pub fn update(&mut self, dt: f32) {
-        self.turn += 0.0 * dt;
-        self.animation_time += dt;
-    }
+    pub fn update(&mut self, dt: f32, input_state: &InputState) {
+        // Player
+        {
+            let transform = &mut self.player.transform;
+            let physics_proxy = &mut self.player.physics_proxy;
 
-    pub fn fixed_update(&mut self, dt: f32, physics_world: &mut PhysicsWorld) {
-        physics_world.step_simulation(dt);
+            if let Some(state) = physics_proxy.current_state {
+                transform.position = state.position.at_y(0.0);
+            }
 
-        for (index, body_id) in self.sphere_ids.iter().enumerate() {
-            self.sphere_states[index] = physics_world.get_state(*body_id);
+            let movement = &mut self.player.movement;
+            let animator = &mut self.player.animator;
+
+            const SPEED: f32 = 300.0;
+            let mut input_velocity = Vec3::ZERO;
+            input_velocity += if input_state.is_down(InputAction::W) {
+                Vec3::new(0.0, 0.0, -SPEED)
+            } else {
+                Vec3::new(0.0, 0.0, 0.0)
+            };
+            input_velocity += if input_state.is_down(InputAction::Q) {
+                Vec3::new(0.0, 0.0, SPEED)
+            } else {
+                Vec3::new(0.0, 0.0, 0.0)
+            };
+
+            movement.velocity = movement
+                .velocity
+                .lerp(input_velocity, (15.0 * dt).clamp(0.0, 1.0));
+
+            let blend = movement.velocity.length() / SPEED;
+            animator.time += movement.velocity.z.signum() * dt;
+            animator.animation_states = [
+                AnimationInstance {
+                    animation: get_handle("Brute_Idle"),
+                    blend_weight: 1.0 - blend,
+                    time: animator.time,
+                    looping: true,
+                },
+                AnimationInstance {
+                    animation: get_handle("Brute_Run"),
+                    blend_weight: blend,
+                    time: animator.time,
+                    looping: true,
+                },
+            ];
         }
     }
 
-    fn layer_color(layer: CollisionLayer) -> glam::Vec4 {
-        match layer {
-            CollisionLayer::Player => glam::Vec4::new(0.2, 0.4, 1.0, 1.0),
-            CollisionLayer::Enemy => glam::Vec4::new(1.0, 0.25, 0.25, 1.0),
-            CollisionLayer::PlayerProjectile => glam::Vec4::new(0.2, 1.0, 0.8, 1.0),
-            CollisionLayer::EnemyProjectile => glam::Vec4::new(1.0, 0.7, 0.2, 1.0),
-            CollisionLayer::Environment => glam::Vec4::new(0.5, 0.5, 0.5, 1.0),
+    pub fn fixed_update(&mut self, dt: f32, physics_world: &mut PhysicsWorld) {
+        if let Some(body_id) = self.player.physics_proxy.body_id {
+            physics_world.set_velocity(body_id, self.player.movement.velocity.xz());
+        }
+
+        physics_world.step_simulation(dt);
+
+        if let Some(body_id) = self.player.physics_proxy.body_id {
+            self.player.physics_proxy.previous_state = self.player.physics_proxy.current_state;
+            self.player.physics_proxy.current_state = physics_world.get_state(body_id);
         }
     }
 
     pub fn render(&mut self, renderer: &mut Renderer) {
-        for (index, state) in self.sphere_states.iter().enumerate() {
-            if let Some(body_state) = state {
-                let layer = self.sphere_layers[index];
-                let radius = self.sphere_radii[index];
-                let color = Self::layer_color(layer);
-
-                renderer.submit(&StaticRenderJob {
-                    transform: Mat4::from_translation(body_state.position.at_y(100.0))
-                        * Mat4::from_scale(Vec3::ONE * radius),
-                    mesh: get_handle("Sphere"),
-                    material: get_handle("Grid"),
-                    color,
-                    ..Default::default()
-                });
-            }
-        }
-
         renderer.submit(&StaticRenderJob {
             transform: Mat4::from_scale_rotation_translation(
                 Vec3 {
@@ -200,6 +222,25 @@ impl Game {
             tex_scale: Vec2::ONE * 10.0,
             ..Default::default()
         });
+
+        // Player
+        {
+            let transform = &self.player.transform;
+            let renderable = &self.player.renderable;
+            let animator = &mut self.player.animator;
+
+            renderer.accumulate_pose(&animator.animation_states, &mut animator.pose);
+
+            renderer.submit(&SkeletalRenderJob {
+                transform: transform.to_matrix() * renderable.render_offset,
+                material: renderable.material,
+                mesh: renderable.mesh,
+                tex_coord: renderable.tex_coord,
+                tex_scale: renderable.tex_scale,
+                color: renderable.color,
+                pose: Some(&animator.pose),
+            });
+        }
 
         // Camera
         {
