@@ -69,6 +69,7 @@ pub struct BodySettings<'a> {
     pub listen_to_contact_events: bool,
 }
 
+#[derive(Clone, Copy)]
 pub struct BodyState {
     pub position: Vec2,
     pub velocity: Vec2,
