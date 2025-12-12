@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use glam::Vec2;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use winit::{
@@ -10,8 +11,9 @@ use winit::{
     window::Window,
 };
 
-use crate::game::Game;
+use crate::input::InputState;
 use crate::renderer::Renderer;
+use crate::{game::Game, input::InputAction};
 use shared::physics::PhysicsWorld;
 
 pub struct State {
@@ -19,6 +21,7 @@ pub struct State {
     pub renderer: Renderer,
     pub physics_world: PhysicsWorld,
     pub game: Game,
+    pub input_state: InputState,
 
     pub previous_time: f64,
     pub time_since_fixed: f32,
@@ -37,6 +40,8 @@ impl State {
         let mut renderer = Renderer::new(&window).await?;
         let mut physics_world = PhysicsWorld::new();
         let mut game = Game::new();
+        let input_state = InputState::new();
+
         game.initialize(&mut physics_world);
         game.load_resources(&mut renderer);
 
@@ -45,6 +50,7 @@ impl State {
             renderer,
             physics_world,
             game,
+            input_state,
             previous_time: get_time(),
             time_since_fixed: 0.0,
         })
@@ -55,7 +61,7 @@ impl State {
     }
 
     pub fn update(&mut self, dt: f32) {
-        self.game.update(dt);
+        self.game.update(dt, &self.input_state);
     }
 
     pub fn fixed_update(&mut self, dt: f32) {
@@ -68,7 +74,15 @@ impl State {
         self.renderer.render()
     }
 
-    fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+    fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        match code {
+            KeyCode::KeyQ => self.input_state.set_action(InputAction::Q, is_pressed),
+            KeyCode::KeyW => self.input_state.set_action(InputAction::W, is_pressed),
+            KeyCode::KeyE => self.input_state.set_action(InputAction::E, is_pressed),
+            KeyCode::KeyR => self.input_state.set_action(InputAction::R, is_pressed),
+            _ => {}
+        }
+
         match (code, is_pressed) {
             (KeyCode::Escape, true) => event_loop.exit(),
             _ => {}
@@ -186,6 +200,8 @@ impl ApplicationHandler<State> for App {
                         log::error!("Unable to render {}", e);
                     }
                 }
+
+                state.input_state.reset();
             }
             WindowEvent::KeyboardInput {
                 event:
@@ -196,6 +212,14 @@ impl ApplicationHandler<State> for App {
                     },
                 ..
             } => state.handle_key(event_loop, code, key_state.is_pressed()),
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {
+                state
+                    .input_state
+                    .set_mouse_position(Vec2::new(position.x as f32, position.y as f32));
+            }
             _ => {}
         }
     }
