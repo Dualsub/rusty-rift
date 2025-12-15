@@ -58,6 +58,7 @@ impl State {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
+        self.game.resize(width, height);
     }
 
     pub fn update(&mut self, dt: f32, alpha: f32) {
@@ -80,11 +81,29 @@ impl State {
             KeyCode::KeyW => self.input_state.set_action(InputAction::W, is_pressed),
             KeyCode::KeyE => self.input_state.set_action(InputAction::E, is_pressed),
             KeyCode::KeyR => self.input_state.set_action(InputAction::R, is_pressed),
+            KeyCode::KeyY => self
+                .input_state
+                .set_action(InputAction::SwitchCameraMode, is_pressed),
+            KeyCode::Space => self
+                .input_state
+                .set_action(InputAction::CameraFollow, is_pressed),
             _ => {}
         }
 
         match (code, is_pressed) {
             (KeyCode::Escape, true) => event_loop.exit(),
+            _ => {}
+        }
+    }
+
+    pub fn handle_mouse_button(&mut self, button: MouseButton, is_pressed: bool) {
+        match button {
+            MouseButton::Left => self
+                .input_state
+                .set_action(InputAction::LeftClick, is_pressed),
+            MouseButton::Right => self
+                .input_state
+                .set_action(InputAction::RightClick, is_pressed),
             _ => {}
         }
     }
@@ -217,10 +236,18 @@ impl ApplicationHandler<State> for App {
                 device_id,
                 position,
             } => {
-                state
-                    .input_state
-                    .set_mouse_position(Vec2::new(position.x as f32, position.y as f32));
+                let normalized_position = Vec2::new(
+                    position.x as f32 / state.window.inner_size().width as f32,
+                    position.y as f32 / state.window.inner_size().height as f32,
+                );
+
+                state.input_state.set_mouse_position(normalized_position);
             }
+            WindowEvent::MouseInput {
+                device_id,
+                state: button_state,
+                button,
+            } => state.handle_mouse_button(button, button_state.is_pressed()),
             _ => {}
         }
     }

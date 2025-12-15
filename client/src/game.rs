@@ -58,6 +58,22 @@ struct CPlayerMovement {
     pub velocity: Vec3,
 }
 
+type CTargetLocation = Option<Vec3>;
+
+type CCameraProjection = Mat4;
+
+#[derive(Clone, Copy, PartialEq)]
+enum CCameraMode {
+    Follow,
+    Detached,
+}
+
+impl Default for CCameraMode {
+    fn default() -> Self {
+        Self::Follow
+    }
+}
+
 #[derive(Default)]
 struct EPlayer {
     pub transform: CTransform,
@@ -65,17 +81,58 @@ struct EPlayer {
     pub renderable: CRenderable,
     pub animator: CAnimator,
     pub movement: CPlayerMovement,
+    pub target: CTargetLocation,
+}
+
+#[derive(Default)]
+struct ECamera {
+    transform: CTransform,
+    projection: CCameraProjection,
+    mode: CCameraMode,
 }
 
 pub struct Game {
+    camera: ECamera,
     player: EPlayer,
 }
 
 impl Game {
     pub fn new() -> Self {
         Self {
+            camera: Default::default(),
             player: Default::default(),
         }
+    }
+
+    fn get_world_position_from_screen(
+        view_projection: Mat4,
+        screen_position: Vec2,
+        y_plane: f32,
+    ) -> Option<Vec3> {
+        let ndc_x = screen_position.x * 2.0 - 1.0;
+        let ndc_y = 1.0 - screen_position.y * 2.0;
+
+        let inv_vp = view_projection.inverse();
+
+        let far_h = inv_vp * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+        let near_h = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+
+        let near = near_h.xyz() / near_h.w;
+        let far = far_h.xyz() / far_h.w;
+
+        let dir = (far - near).normalize();
+
+        let denom = dir.y;
+        if denom.abs() < 1e-6 {
+            return None;
+        }
+
+        let t = (y_plane - near.y) / denom;
+        if t < 0.0 {
+            return None;
+        }
+
+        Some(near + dir * t)
     }
 
     pub fn initialize(&mut self, physics_world: &mut PhysicsWorld) {
@@ -144,6 +201,7 @@ impl Game {
         {
             let transform = &mut self.player.transform;
             let physics_proxy = &mut self.player.physics_proxy;
+            let target = &mut self.player.target;
 
             if let Some(state) = physics_proxy.current_state
                 && let Some(prev_state) = physics_proxy.previous_state
@@ -151,28 +209,38 @@ impl Game {
                 transform.position = prev_state.position.lerp(state.position, alpha).at_y(0.0);
             }
 
+            if let Some(mouse_world_position) = Self::get_world_position_from_screen(
+                self.camera.projection * self.camera.transform.to_matrix().inverse(),
+                input_state.get_mouse_position(),
+                0.0,
+            ) {
+                if input_state.is_pressed(InputAction::RightClick) {
+                    *target = Some(mouse_world_position);
+                }
+            }
+
             let movement = &mut self.player.movement;
             let animator = &mut self.player.animator;
 
             const SPEED: f32 = 300.0;
+            const MIN_TARGET_DISTANCE: f32 = 10.0;
             let mut input_velocity = Vec3::ZERO;
-            input_velocity += if input_state.is_down(InputAction::W) {
-                Vec3::new(0.0, 0.0, -SPEED)
-            } else {
-                Vec3::new(0.0, 0.0, 0.0)
-            };
-            input_velocity += if input_state.is_down(InputAction::Q) {
-                Vec3::new(0.0, 0.0, SPEED)
-            } else {
-                Vec3::new(0.0, 0.0, 0.0)
-            };
+            if let Some(target_location) = *target {
+                let to_target = target_location - transform.position;
+                let distance_sqrd = to_target.length_squared();
+                if distance_sqrd > MIN_TARGET_DISTANCE * MIN_TARGET_DISTANCE {
+                    input_velocity = SPEED * to_target.normalize_or_zero();
+                } else {
+                    *target = None;
+                }
+            }
 
             movement.velocity = movement
                 .velocity
                 .lerp(input_velocity, (15.0 * dt).clamp(0.0, 1.0));
 
             let blend = movement.velocity.length() / SPEED;
-            animator.time += movement.velocity.z.signum() * dt;
+            animator.time += dt;
             animator.animation_states = [
                 AnimationInstance {
                     animation: get_handle("Brute_Idle"),
@@ -187,6 +255,42 @@ impl Game {
                     looping: true,
                 },
             ];
+
+            transform.rotation = transform.rotation.slerp(
+                Quat::from_rotation_y(movement.velocity.x.atan2(movement.velocity.z)),
+                20.0 * dt,
+            );
+        }
+
+        // Camera
+        {
+            const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
+            const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
+
+            if input_state.is_pressed(InputAction::SwitchCameraMode) {
+                self.camera.mode = match self.camera.mode {
+                    CCameraMode::Follow => CCameraMode::Detached,
+                    CCameraMode::Detached => CCameraMode::Follow,
+                }
+            }
+
+            let transform = &mut self.camera.transform;
+
+            if self.camera.mode == CCameraMode::Follow
+                || input_state.is_down(InputAction::CameraFollow)
+            {
+                let camera_target =
+                    glam::vec3(0.0, 120.0, 0.0) + self.player.transform.position.xz().at_y(0.0);
+
+                transform.position = camera_target
+                    + Vec3 {
+                        x: 0.0,
+                        y: CAMERA_ANGLE.sin(),
+                        z: CAMERA_ANGLE.cos(),
+                    } * CAMERA_RADIUS;
+            }
+
+            transform.rotation = Quat::from_rotation_x(-CAMERA_ANGLE);
         }
     }
 
@@ -246,20 +350,20 @@ impl Game {
 
         // Camera
         {
-            let camera_target = glam::vec3(0.0, 120.0, 0.0);
-
-            const CAMERA_RADIUS: f32 = 1844.8713602850469_f32;
-            const CAMERA_ANGLE: f32 = f32::to_radians(56.0);
-
-            let camera_position = camera_target
-                + Vec3 {
-                    x: 0.0,
-                    y: CAMERA_ANGLE.sin(),
-                    z: CAMERA_ANGLE.cos(),
-                } * CAMERA_RADIUS;
-            let camera_orientation = Quat::from_rotation_x(-CAMERA_ANGLE);
-
-            renderer.set_camera_position_and_orientation(camera_position, camera_orientation);
+            renderer.set_camera_projection(self.camera.projection);
+            renderer.set_camera_position_and_orientation(
+                self.camera.transform.position,
+                self.camera.transform.rotation,
+            );
         }
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.camera.projection = Mat4::perspective_rh(
+            f32::to_radians(40.0),
+            width as f32 / height as f32,
+            1.0,
+            3000.0,
+        );
     }
 }
