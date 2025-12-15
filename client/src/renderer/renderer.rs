@@ -116,6 +116,7 @@ pub struct Renderer {
     skeletal_scene_bind_collection: BindCollection,
     scene_material_pipeline: MaterialGroup,
 
+    camera_projection_matrix: Mat4,
     camera_transform: Transform,
     uniform_buffer: Buffer,
     uniform_data: UniformBufferData,
@@ -563,6 +564,7 @@ impl Renderer {
                 rotation: Quat::from_rotation_x(f32::to_radians(-30.0)),
                 ..Default::default()
             },
+            camera_projection_matrix: Mat4::IDENTITY,
             render_data: RenderData::new(),
             uniform_buffer,
             uniform_data: UniformBufferData {
@@ -612,13 +614,7 @@ impl Renderer {
     }
 
     fn upload_uniform_buffer(&mut self) {
-        let projection_matrix = Mat4::perspective_rh(
-            f32::to_radians(40.0),
-            self.render_device.config.width as f32 / self.render_device.config.height as f32,
-            1.0,
-            3000.0,
-        );
-        self.uniform_data.projection_matrix = projection_matrix.to_data();
+        self.uniform_data.projection_matrix = self.camera_projection_matrix.to_data();
 
         self.camera_transform.rotation *= Quat::from_rotation_y(f32::to_radians(0.1));
         let view_matrix = self.camera_transform.to_matrix().inverse();
@@ -631,7 +627,7 @@ impl Renderer {
         ];
         self.uniform_data.light_matrix = Self::compute_directional_light_vp(
             view_matrix,
-            projection_matrix,
+            self.camera_projection_matrix,
             Vec3::from_slice(&self.uniform_data.light_direction),
         )
         .to_data();
@@ -797,6 +793,10 @@ impl Renderer {
     pub fn set_camera_position_and_orientation(&mut self, position: Vec3, orientation: Quat) {
         self.camera_transform.position = position;
         self.camera_transform.rotation = orientation;
+    }
+
+    pub fn set_camera_projection(&mut self, projection: Mat4) {
+        self.camera_projection_matrix = projection;
     }
 
     #[allow(dead_code)]
