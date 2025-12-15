@@ -63,6 +63,7 @@ impl InputState {
         (self.pressed_events & action.get_value()) != 0
     }
 
+    #[allow(dead_code)]
     pub fn is_released(&self, action: InputAction) -> bool {
         (self.released_events & action.get_value()) != 0
     }

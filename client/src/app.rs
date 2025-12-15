@@ -233,7 +233,7 @@ impl ApplicationHandler<State> for App {
                 ..
             } => state.handle_key(event_loop, code, key_state.is_pressed()),
             WindowEvent::CursorMoved {
-                device_id,
+                device_id: _device_id,
                 position,
             } => {
                 let normalized_position = Vec2::new(
@@ -244,7 +244,7 @@ impl ApplicationHandler<State> for App {
                 state.input_state.set_mouse_position(normalized_position);
             }
             WindowEvent::MouseInput {
-                device_id,
+                device_id: _device_id,
                 state: button_state,
                 button,
             } => state.handle_mouse_button(button, button_state.is_pressed()),
