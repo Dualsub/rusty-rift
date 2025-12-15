@@ -1,3 +1,5 @@
+use wgpu::DepthStencilState;
+
 use crate::renderer::RenderDevice;
 
 pub struct MaterialPipelineDesc<'a> {
@@ -7,6 +9,18 @@ pub struct MaterialPipelineDesc<'a> {
     pub layout_entries: &'a [wgpu::BindGroupLayoutEntry],
     pub vertex_layout: &'a wgpu::VertexBufferLayout<'static>,
     pub push_contant_ranges: &'a [wgpu::PushConstantRange],
+    pub pass_target: PassTarget,
+}
+
+pub enum PassTarget {
+    Scene,
+    Composite,
+}
+
+impl Default for PassTarget {
+    fn default() -> Self {
+        Self::Scene
+    }
 }
 
 pub struct MaterialPipeline {
@@ -42,11 +56,26 @@ impl RenderDevice {
                 push_constant_ranges: desc.push_contant_ranges,
             });
 
-        let default_target = [Some(wgpu::ColorTargetState {
+        const SCENE_COLOR_TARGETS: [Option<wgpu::ColorTargetState>; 1] =
+            [Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })];
+
+        let composite_color_targets = [Some(wgpu::ColorTargetState {
             format: self.config.format,
-            blend: Some(wgpu::BlendState::REPLACE),
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write_mask: wgpu::ColorWrites::ALL,
         })];
+
+        let default_depth_stencil = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        };
 
         let pipeline = self
             .device
@@ -64,7 +93,10 @@ impl RenderDevice {
                         module: fragment_shader,
                         entry_point: Some("fs_main"),
                         compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets: &default_target,
+                        targets: match desc.pass_target {
+                            PassTarget::Scene => &SCENE_COLOR_TARGETS,
+                            PassTarget::Composite => &composite_color_targets,
+                        },
                     }),
                     None => None,
                 },
@@ -72,18 +104,18 @@ impl RenderDevice {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: match desc.pass_target {
+                        PassTarget::Scene => Some(wgpu::Face::Back),
+                        PassTarget::Composite => None,
+                    },
                     unclipped_depth: false,
                     polygon_mode: wgpu::PolygonMode::Fill,
                     conservative: false,
                 },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
+                depth_stencil: match desc.pass_target {
+                    PassTarget::Scene => Some(default_depth_stencil),
+                    PassTarget::Composite => None,
+                },
                 multisample: wgpu::MultisampleState {
                     count: 1,
                     mask: !0,

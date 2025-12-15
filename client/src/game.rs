@@ -10,7 +10,7 @@ use crate::{
     renderer::{
         Renderer, ResourceHandle, StaticRenderJob,
         animation::{AnimationInstance, Pose},
-        render_data::SkeletalRenderJob,
+        render_data::{SkeletalRenderJob, SpriteRenderJob},
         resources::get_handle,
     },
 };
@@ -326,6 +326,15 @@ impl Game {
             mesh: get_handle("Floor"),
             color: Vec4::new(0.651, 0.541, 0.392, 1.0),
             tex_scale: Vec2::ONE * 10.0,
+            ..Default::default()
+        });
+
+        renderer.submit(&SpriteRenderJob {
+            position: Vec2::new(0.0, 0.0),
+            size: Vec2::new(1.0, 1.0),
+            material: Renderer::WHITE_SPRITE_MATERIAL,
+            color: Vec4::new(1.0, 1.0, 1.0, 0.1),
+            tex_scale: Vec2::ONE,
             ..Default::default()
         });
 

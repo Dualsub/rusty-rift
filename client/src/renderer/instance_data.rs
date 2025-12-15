@@ -21,3 +21,25 @@ impl Default for StaticInstanceData {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SpriteInstanceData {
+    pub(crate) position: Vec2Data,
+    pub(crate) scale: Vec2Data,
+    pub(crate) color: Vec4Data,
+    pub(crate) tex_coord: Vec2Data,
+    pub(crate) tex_scale: Vec2Data,
+}
+
+impl Default for SpriteInstanceData {
+    fn default() -> Self {
+        Self {
+            position: Vec2::ZERO.to_array(),
+            scale: Vec2::ONE.to_array(),
+            color: Vec4::ONE.to_data(),
+            tex_coord: Vec2::ZERO.to_array(),
+            tex_scale: Vec2::ONE.to_array(),
+        }
+    }
+}

@@ -1,3 +1,4 @@
+use glam::U8Vec4;
 use shared::{math::*, transform::Transform};
 use std::ops::Range;
 use std::sync::Arc;
@@ -5,9 +6,10 @@ use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
-    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, RenderData,
-    RenderDevice, Resource, ResourceHandle, ResourcePool, SkeletalMeshVertex, StaticInstanceData,
-    StaticMeshVertex, Texture, TextureDesc,
+    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, MeshLoadDesc,
+    PassTarget, RenderData, RenderDevice, Resource, ResourceHandle, ResourcePool,
+    SkeletalMeshVertex, SpriteInstanceData, StaticInstanceData, StaticMesh, StaticMeshVertex,
+    Texture, TextureDesc,
     animation::{AnimationInstance, Pose},
     render_data::SubmitJob,
     resources::get_handle,
@@ -39,6 +41,9 @@ pub struct DrawData {
     pub skeletal_batches: Vec<RenderBatch>,
     pub skeletal_instances: Vec<StaticInstanceData>,
     pub bones: Vec<Mat4Data>,
+
+    pub sprite_batches: Vec<RenderBatch>,
+    pub sprite_instances: Vec<SpriteInstanceData>,
 }
 
 // A short-term abstraction
@@ -103,18 +108,28 @@ impl RenderDevice {
 pub struct Renderer {
     render_device: RenderDevice,
     resource_pool: ResourcePool,
-    depth_buffer: Texture,
+
+    screen_mesh: StaticMesh,
+
     _depth_sampler: wgpu::Sampler,
     default_sampler: wgpu::Sampler,
 
     shadow_map: Texture,
+    depth_buffer: Texture,
+    scene_texture: Texture,
+
     static_shadow_bind_collection: BindCollection,
     skeletal_shadow_bind_collection: BindCollection,
     shadow_material_pipeline: MaterialGroup,
+    sprite_material_pipeline: MaterialPipeline,
 
     static_scene_bind_collection: BindCollection,
     skeletal_scene_bind_collection: BindCollection,
     scene_material_pipeline: MaterialGroup,
+    sprite_bind_collection: BindCollection,
+
+    composite_bind_collection: BindCollection,
+    composite_material_pipeline: MaterialPipeline,
 
     camera_projection_matrix: Mat4,
     camera_transform: Transform,
@@ -124,6 +139,7 @@ pub struct Renderer {
     static_instance_buffer: Buffer,
     skeletal_instance_buffer: Buffer,
     bone_buffer: Buffer,
+    sprite_instance_buffer: Buffer,
 
     render_data: RenderData,
 }
@@ -134,6 +150,50 @@ impl Renderer {
 
     const STATIC_INSTANCE_COUNT: usize = 512;
     const BONE_COUNT: usize = Self::STATIC_INSTANCE_COUNT * 64;
+    const SRPITE_INSTANCE_COUNT: usize = 2046;
+
+    pub const QUAD_MESH: ResourceHandle = get_handle("quad");
+    pub const WHITE_SPRITE_MATERIAL: ResourceHandle = get_handle("white_sprite_material");
+
+    fn create_default_resources(
+        render_device: &RenderDevice,
+        sprite_material_pipeline: &MaterialPipeline,
+        sampler: &wgpu::Sampler,
+        resource_pool: &mut ResourcePool,
+    ) {
+        let texture = render_device.create_texture(&TextureDesc {
+            width: 1,
+            height: 1,
+            layer_count: 1,
+            mip_level_count: 1,
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            bytes_per_channel: 1,
+            channel_count: 4,
+            pixels: vec![255u8, 255u8, 255u8, 255u8],
+            ..Default::default()
+        });
+
+        let white_sprite_material = render_device.create_material_instance(
+            &sprite_material_pipeline, // Need to be looked over later
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            },
+        );
+
+        resource_pool.add_resource(
+            Self::WHITE_SPRITE_MATERIAL,
+            Resource::MaterialInstance(white_sprite_material),
+        );
+    }
 
     fn create_depth_buffer(render_device: &RenderDevice) -> Texture {
         render_device.create_texture(&TextureDesc {
@@ -146,29 +206,45 @@ impl Renderer {
         })
     }
 
-    fn create_samplers(device: &wgpu::Device) -> (wgpu::Sampler, wgpu::Sampler) {
-        let default_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+    fn create_scene_texture(render_device: &RenderDevice) -> Texture {
+        render_device.create_texture(&TextureDesc {
+            width: render_device.config.width.max(1),
+            height: render_device.config.height.max(1),
+            layer_count: 1,
+            format: Some(wgpu::TextureFormat::Rgba16Float),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_dimension: wgpu::TextureViewDimension::D2,
             ..Default::default()
-        });
+        })
+    }
 
-        let depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            compare: Some(wgpu::CompareFunction::Less),
-            lod_min_clamp: 0.0,
-            lod_max_clamp: 100.0,
-            ..Default::default()
-        });
+    fn create_samplers(render_device: &RenderDevice) -> (wgpu::Sampler, wgpu::Sampler) {
+        let default_sampler = render_device
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+
+        let depth_sampler = render_device
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                compare: Some(wgpu::CompareFunction::Less),
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 100.0,
+                ..Default::default()
+            });
 
         (default_sampler, depth_sampler)
     }
@@ -186,7 +262,75 @@ impl Renderer {
         })
     }
 
-    fn create_storage_buffers(render_device: &RenderDevice) -> (Buffer, Buffer, Buffer) {
+    fn create_meshes(render_device: &RenderDevice) -> (StaticMesh, StaticMesh) {
+        let screen_vertices: [StaticMeshVertex; 3] = [
+            StaticMeshVertex {
+                position: [-1.0, -1.0, 0.0],
+                uvs: [0.0, 2.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            StaticMeshVertex {
+                position: [3.0, -1.0, 0.0],
+                uvs: [2.0, 2.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            StaticMeshVertex {
+                position: [-1.0, 3.0, 0.0],
+                uvs: [0.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+        ];
+
+        let screen_mesh = render_device
+            .create_mesh(&MeshLoadDesc {
+                vertex_data: bytemuck::cast_slice(screen_vertices.as_slice()).to_vec(),
+                indices: vec![0, 1, 2],
+                ..Default::default()
+            })
+            .expect("Could not create fullscreen mesh");
+
+        let quad_vertices: [StaticMeshVertex; 4] = [
+            StaticMeshVertex {
+                position: [0.0, 0.0, 0.0],
+                uvs: [0.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            StaticMeshVertex {
+                position: [1.0, 0.0, 0.0],
+                uvs: [1.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            StaticMeshVertex {
+                position: [1.0, 1.0, 0.0],
+                uvs: [1.0, 1.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+            StaticMeshVertex {
+                position: [0.0, 1.0, 0.0],
+                uvs: [0.0, 1.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                normal: [0.0, 0.0, 1.0],
+            },
+        ];
+
+        let quad_mesh = render_device
+            .create_mesh(&MeshLoadDesc {
+                vertex_data: bytemuck::cast_slice(quad_vertices.as_slice()).to_vec(),
+                indices: vec![0, 1, 2, 2, 3, 0],
+                ..Default::default()
+            })
+            .expect("Could not create quad mesh");
+
+        (screen_mesh, quad_mesh)
+    }
+
+    fn create_storage_buffers(render_device: &RenderDevice) -> (Buffer, Buffer, Buffer, Buffer) {
         let size = Self::STATIC_INSTANCE_COUNT * std::mem::size_of::<StaticInstanceData>();
 
         let static_instance_buffer = render_device.create_buffer(&BufferDesc {
@@ -204,10 +348,16 @@ impl Renderer {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
+        let sprite_instance_buffer = render_device.create_buffer(&BufferDesc {
+            size: Self::SRPITE_INSTANCE_COUNT * std::mem::size_of::<SpriteInstanceData>(),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+
         (
             static_instance_buffer,
             skeletal_instance_buffer,
             bone_buffer,
+            sprite_instance_buffer,
         )
     }
 
@@ -379,6 +529,108 @@ impl Renderer {
         return (static_scene, skeletal_scene, static_shadow, skeletal_shadow);
     }
 
+    fn create_sprite_pipeline(
+        render_device: &RenderDevice,
+        instance_buffer: &Buffer,
+    ) -> (BindCollection, MaterialPipeline) {
+        let bind_collection = render_device.create_bind_collection(vec![BindEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            resource: instance_buffer.buffer.as_entire_binding(),
+        }]);
+
+        let sprite_shader =
+            render_device
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("SpriteShader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../../res/shaders/sprite.wgsl").into(),
+                    ),
+                });
+
+        let material_pipeline = render_device.create_material_pipeline(&MaterialPipelineDesc {
+            vertex_shader: &sprite_shader,
+            fragment_shader: Some(&sprite_shader),
+            bind_group_layouts: &[&bind_collection.bind_group_layout],
+            layout_entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            vertex_layout: &StaticMeshVertex::desc(),
+            push_contant_ranges: &[],
+            pass_target: PassTarget::Composite,
+        });
+
+        return (bind_collection, material_pipeline);
+    }
+
+    fn create_composite_pipeline(
+        render_device: &RenderDevice,
+        scene_texture: &Texture,
+        sampler: &wgpu::Sampler,
+    ) -> (BindCollection, MaterialPipeline) {
+        let bind_collection = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                resource: wgpu::BindingResource::TextureView(&scene_texture.view),
+            },
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ]);
+
+        let composite_shader =
+            render_device
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("CompositeShader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../../res/shaders/composite.wgsl").into(),
+                    ),
+                });
+
+        let material_pipeline = render_device.create_material_pipeline(&MaterialPipelineDesc {
+            vertex_shader: &composite_shader,
+            fragment_shader: Some(&composite_shader),
+            bind_group_layouts: &[&bind_collection.bind_group_layout],
+            layout_entries: &[],
+            vertex_layout: &StaticMeshVertex::desc(),
+            push_contant_ranges: &[],
+            pass_target: PassTarget::Composite,
+        });
+
+        return (bind_collection, material_pipeline);
+    }
+
     fn create_shadow_material_pipelines(
         render_device: &RenderDevice,
         static_bind_group_layout: &wgpu::BindGroupLayout,
@@ -413,6 +665,7 @@ impl Renderer {
                     layout_entries: &[],
                     vertex_layout: &StaticMeshVertex::desc(),
                     push_contant_ranges: &[],
+                    pass_target: PassTarget::Scene,
                 },
             ),
             skeletal_material_pipeline: render_device.create_material_pipeline(
@@ -423,6 +676,7 @@ impl Renderer {
                     layout_entries: &[],
                     vertex_layout: &SkeletalMeshVertex::desc(),
                     push_contant_ranges: &[],
+                    pass_target: PassTarget::Scene,
                 },
             ),
         }
@@ -487,6 +741,7 @@ impl Renderer {
                 &MaterialPipelineDesc {
                     bind_group_layouts: &[static_bind_group_layout],
                     push_contant_ranges: &[],
+                    pass_target: PassTarget::Scene,
                     vertex_shader: &static_vertex_shader,
                     fragment_shader: Some(&fragment_shader),
                     layout_entries: &material_layout_entries,
@@ -497,6 +752,7 @@ impl Renderer {
                 &MaterialPipelineDesc {
                     bind_group_layouts: &[skeletal_bind_group_layout],
                     push_contant_ranges: &[],
+                    pass_target: PassTarget::Scene,
                     vertex_shader: &skeletal_vertex_shader,
                     fragment_shader: Some(&fragment_shader),
                     layout_entries: &material_layout_entries,
@@ -508,14 +764,18 @@ impl Renderer {
 
     pub async fn new(window: &Arc<Window>) -> anyhow::Result<Renderer> {
         let render_device = RenderDevice::new(window).await?;
-        let resource_pool = ResourcePool::new();
+        let mut resource_pool = ResourcePool::new();
 
-        let (default_sampler, depth_sampler) = Self::create_samplers(&render_device.device);
+        let (screen_mesh, quad_mesh) = Self::create_meshes(&render_device);
+        resource_pool.add_resource(Self::QUAD_MESH, Resource::StaticMesh(quad_mesh));
 
-        let depth_buffer = Renderer::create_depth_buffer(&render_device);
+        let (default_sampler, depth_sampler) = Self::create_samplers(&render_device);
+
         let shadow_map = Self::create_shadow_map(&render_device);
+        let depth_buffer = Renderer::create_depth_buffer(&render_device);
+        let scene_texture = Renderer::create_scene_texture(&render_device);
 
-        let (static_instance_buffer, skeletal_instance_buffer, bone_buffer) =
+        let (static_instance_buffer, skeletal_instance_buffer, bone_buffer, sprite_instance_buffer) =
             Self::create_storage_buffers(&render_device);
         let uniform_buffer = Self::create_uniform_buffer(&render_device);
 
@@ -534,6 +794,12 @@ impl Renderer {
             &bone_buffer,
         );
 
+        let (sprite_bind_collection, sprite_material_pipeline) =
+            Self::create_sprite_pipeline(&render_device, &sprite_instance_buffer);
+
+        let (composite_bind_collection, composite_material_pipeline) =
+            Self::create_composite_pipeline(&render_device, &scene_texture, &default_sampler);
+
         let shadow_material_pipeline = Self::create_shadow_material_pipelines(
             &render_device,
             &static_shadow_bind_collection.bind_group_layout,
@@ -545,16 +811,27 @@ impl Renderer {
             &skeletal_scene_bind_collection.bind_group_layout,
         );
 
+        Self::create_default_resources(
+            &render_device,
+            &sprite_material_pipeline,
+            &default_sampler,
+            &mut resource_pool,
+        );
+
         Ok(Renderer {
             render_device,
             resource_pool,
+            screen_mesh,
             default_sampler,
-            depth_buffer,
             _depth_sampler: depth_sampler,
             shadow_map,
+            depth_buffer,
+            scene_texture,
             static_shadow_bind_collection,
             skeletal_shadow_bind_collection,
+            sprite_bind_collection,
             shadow_material_pipeline,
+            sprite_material_pipeline,
             camera_transform: Transform {
                 position: Vec3 {
                     x: 0.0,
@@ -575,9 +852,12 @@ impl Renderer {
                 light_direction: [0.0, -1.0, -1.0, 0.0],
                 light_color: [1.0, 1.0, 1.0, 1.0],
             },
+            composite_bind_collection,
+            composite_material_pipeline,
             static_instance_buffer,
             skeletal_instance_buffer,
             bone_buffer,
+            sprite_instance_buffer,
             scene_material_pipeline,
             static_scene_bind_collection,
             skeletal_scene_bind_collection,
@@ -596,6 +876,15 @@ impl Renderer {
             render_device.is_surface_configured = true;
 
             self.depth_buffer = Renderer::create_depth_buffer(&render_device);
+            self.scene_texture = Renderer::create_scene_texture(&render_device);
+            let (composite_bind_collection, composite_material_pipeline) =
+                Self::create_composite_pipeline(
+                    &render_device,
+                    &self.scene_texture,
+                    &self.default_sampler,
+                );
+            self.composite_bind_collection = composite_bind_collection;
+            self.composite_material_pipeline = composite_material_pipeline;
         }
     }
 
@@ -657,6 +946,12 @@ impl Renderer {
             bytemuck::cast_slice(draw_data.bones.as_slice()),
             0,
         );
+
+        self.render_device.write_buffer(
+            &self.sprite_instance_buffer,
+            bytemuck::cast_slice(draw_data.sprite_instances.as_slice()),
+            0,
+        );
     }
 
     fn draw_frame(&self, draw_data: &DrawData) -> Result<(), wgpu::SurfaceError> {
@@ -707,7 +1002,7 @@ impl Renderer {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.scene_texture.view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -744,6 +1039,46 @@ impl Renderer {
                 &self.scene_material_pipeline.skeletal_material_pipeline,
                 &[&self.skeletal_scene_bind_collection.bind_group],
                 &draw_data.skeletal_batches,
+            );
+        }
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Composite Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            // Full screen quad draw
+            {
+                render_pass.set_pipeline(&self.composite_material_pipeline.pipeline);
+                render_pass.set_bind_group(0, &self.composite_bind_collection.bind_group, &[]);
+                let draw_info = self.screen_mesh.get_draw_info();
+                render_pass.set_vertex_buffer(0, draw_info.vertex_slice);
+                render_pass.set_index_buffer(draw_info.index_slice, wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..draw_info.index_count, 0, 0..1);
+            }
+
+            self.render_batches(
+                &mut render_pass,
+                &self.sprite_material_pipeline,
+                &[&self.sprite_bind_collection.bind_group],
+                &draw_data.sprite_batches,
             );
         }
 
@@ -939,6 +1274,39 @@ impl Renderer {
 
         let material_instance = self.render_device.create_material_instance(
             &self.scene_material_pipeline.static_material_pipeline, // Need to be looked over later
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                    },
+                ],
+            },
+        );
+
+        self.resource_pool
+            .add_resource(handle, Resource::MaterialInstance(material_instance));
+
+        handle
+    }
+
+    pub fn create_sprite_material(
+        &mut self,
+        name: &'static str,
+        texture_bytes: &[u8],
+    ) -> ResourceHandle {
+        let handle = get_handle(name);
+        let texture = self
+            .render_device
+            .load_texture(texture_bytes)
+            .expect("Failed to load texture");
+
+        let material_instance = self.render_device.create_material_instance(
+            &self.sprite_material_pipeline, // Need to be looked over later
             &MaterialInstanceDesc {
                 entires: &[
                     wgpu::BindGroupEntry {
