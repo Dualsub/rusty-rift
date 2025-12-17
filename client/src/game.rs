@@ -8,9 +8,9 @@ use shared::{
 use crate::{
     input::{InputAction, InputState},
     renderer::{
-        Renderer, ResourceHandle, StaticRenderJob,
+        Renderer, ResourceHandle, SkeletalRenderJob, SpriteRenderJob, SpriteRenderMode,
+        StaticRenderJob,
         animation::{AnimationInstance, Pose},
-        render_data::{SkeletalRenderJob, SpriteRenderJob},
         resources::get_handle,
     },
 };
@@ -167,16 +167,21 @@ impl Game {
     }
 
     pub fn load_resources(&mut self, renderer: &mut Renderer) {
-        renderer.create_material("Grid", include_bytes!("../../assets/textures/grid.dat"));
+        let grid_texture = renderer.load_texture(
+            "GridTexture",
+            include_bytes!("../../assets/textures/grid.dat"),
+        );
+        renderer.create_material("Grid", grid_texture);
         renderer.load_mesh("Floor", include_bytes!("../../assets/models/floor.dat"));
         renderer.load_mesh("Sphere", include_bytes!("../../assets/models/sphere.dat"));
 
-        renderer.create_material(
-            "BruteMaterial",
+        let brute_texture = renderer.load_texture(
+            "BruteTexture",
             include_bytes!(
                 "../../assets/champions/brute/textures/MaleBruteA_Body_diffuse1_ncl1_1.dat"
             ),
         );
+        renderer.create_material("BruteMaterial", brute_texture);
 
         let mesh = renderer.load_skeletal_mesh(
             "Brute",
@@ -194,6 +199,12 @@ impl Game {
             "Brute_Run",
             include_bytes!("../../assets/champions/brute/animations/Brute_Run.dat"),
         );
+
+        let font_handle = renderer.load_font(
+            "DefaultFont",
+            include_bytes!("../../assets/ui/fonts/poppins_font.dat"),
+        );
+        renderer.create_font_material("DefaultFontMaterial", font_handle);
     }
 
     pub fn update(&mut self, dt: f32, alpha: f32, input_state: &InputState) {
@@ -330,11 +341,12 @@ impl Game {
         });
 
         renderer.submit(&SpriteRenderJob {
-            position: Vec2::new(0.0, 0.0),
-            size: Vec2::new(1.0, 1.0),
-            material: Renderer::WHITE_SPRITE_MATERIAL,
-            color: Vec4::new(1.0, 1.0, 1.0, 0.1),
+            position: Vec2::new(-1.0, -1.0),
+            size: Vec2::new(2.0, 2.0),
+            material: get_handle("DefaultFontMaterial"),
+            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
             tex_scale: Vec2::ONE,
+            mode: SpriteRenderMode::Font,
             ..Default::default()
         });
 
