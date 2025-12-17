@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 mod animation;
+mod font;
 mod mesh;
 mod texture;
 
@@ -33,6 +34,12 @@ enum Commands {
         path: String,
         #[arg(short, long)]
         skeleton: String,
+        #[arg(short, long)]
+        output: String,
+    },
+    Font {
+        atlas: String,
+        json: String,
         #[arg(short, long)]
         output: String,
     },
@@ -73,5 +80,15 @@ fn main() {
             skeleton: &skeleton,
             output: &output,
         }),
+        Commands::Font {
+            atlas,
+            json,
+            output,
+        } => font::load(&font::FontLoadDesc {
+            atlas: &atlas,
+            json: &json,
+            output: &output,
+        })
+        .expect("Failed to load font"),
     }
 }
