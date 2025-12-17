@@ -17,6 +17,49 @@ fn mip_level_count(width: u32, height: u32) -> u32 {
     32 - max_side.leading_zeros()
 }
 
+pub fn write_texture(img: &image::DynamicImage, file: &mut File) -> anyhow::Result<()> {
+    let width = img.width();
+    let height = img.height();
+    let layer_count: u32 = 1;
+    let color = img.color();
+    let channel_count = color.channel_count() as u32;
+    let bytes_per_channel = (color.bytes_per_pixel() as u32) / channel_count;
+    let mip_level_count = mip_level_count(width, height);
+
+    println!(
+        "Loaded {}x{}x{} of {:?}.",
+        width, height, layer_count, color
+    );
+
+    // Header
+    file.write_all(&width.to_le_bytes())?;
+    file.write_all(&height.to_le_bytes())?;
+    file.write_all(&layer_count.to_le_bytes())?;
+    file.write_all(&channel_count.to_le_bytes())?;
+    file.write_all(&bytes_per_channel.to_le_bytes())?;
+    file.write_all(&mip_level_count.to_le_bytes())?;
+
+    // Image
+    for mip_index in 0..mip_level_count {
+        let mip_width: u32 = width >> mip_index;
+        let mip_height: u32 = height >> mip_index;
+        for layer_index in 0..layer_count {
+            println!("Layer: {}, Mip: {} {}", layer_index, mip_width, mip_height);
+            if mip_width != width || mip_height != height {
+                // We need to resize
+                let mip =
+                    imageops::resize(img, mip_width, mip_height, imageops::FilterType::Lanczos3);
+                file.write_all(mip.as_bytes())?;
+            } else {
+                // We are writing the whole image
+                file.write_all(img.as_bytes())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn load(desc: &TextureLoadDesc) -> anyhow::Result<()> {
     let mut img = ImageReader::open(desc.path)?
         .with_guessed_format()?
@@ -38,46 +81,11 @@ pub fn load(desc: &TextureLoadDesc) -> anyhow::Result<()> {
         println!("Resized image to {}x{}", resize_width, resize_height);
     }
 
-    let width = img.width();
-    let height = img.height();
-    let layer_count: u32 = 1;
-    let color = img.color();
-    let channel_count = color.channel_count() as u32;
-    let bytes_per_channel = (color.bytes_per_pixel() as u32) / channel_count;
-    let mip_level_count = mip_level_count(width, height);
-
-    println!(
-        "Loaded {}x{}x{} of {:?}.",
-        width, height, layer_count, color
-    );
-
     let mut file = File::create(desc.output).expect("Could not open output file.");
+    write_texture(&img, &mut file)?;
 
-    // Header
-    file.write_all(&width.to_le_bytes())?;
-    file.write_all(&height.to_le_bytes())?;
-    file.write_all(&layer_count.to_le_bytes())?;
-    file.write_all(&channel_count.to_le_bytes())?;
-    file.write_all(&bytes_per_channel.to_le_bytes())?;
-    file.write_all(&mip_level_count.to_le_bytes())?;
-
-    // Image
-    for mip_index in 0..mip_level_count {
-        let mip_width: u32 = width >> mip_index;
-        let mip_height: u32 = height >> mip_index;
-        for layer_index in 0..layer_count {
-            println!("Layer: {}, Mip: {} {}", layer_index, mip_width, mip_height);
-            if mip_width != width || mip_height != height {
-                // We need to resize
-                let mip =
-                    imageops::resize(&img, mip_width, mip_height, imageops::FilterType::Lanczos3);
-                file.write_all(mip.as_bytes())?;
-            } else {
-                // We are writing the whole image
-                file.write_all(img.as_bytes())?;
-            }
-        }
-    }
+    let layer_count: u32 = 1;
+    let mip_level_count = mip_level_count(img.width(), img.height());
 
     println!(
         "Packed image into {}. Generated {} layers, each with {} mips",
