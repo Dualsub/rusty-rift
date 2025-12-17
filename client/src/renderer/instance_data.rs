@@ -30,6 +30,9 @@ pub struct SpriteInstanceData {
     pub(crate) color: Vec4Data,
     pub(crate) tex_coord: Vec2Data,
     pub(crate) tex_scale: Vec2Data,
+    pub(crate) mode: u32,
+    pub(crate) layer: u32,
+    pub(crate) _padding: [u32; 2],
 }
 
 impl Default for SpriteInstanceData {
@@ -40,6 +43,9 @@ impl Default for SpriteInstanceData {
             color: Vec4::ONE.to_data(),
             tex_coord: Vec2::ZERO.to_array(),
             tex_scale: Vec2::ONE.to_array(),
+            mode: 0,
+            layer: 0, // This is not used in the shader, only to sort sprites
+            _padding: [0; 2],
         }
     }
 }

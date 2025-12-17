@@ -15,10 +15,14 @@ pub use mesh::{
 pub mod animation;
 pub use animation::Animation;
 pub mod device;
+pub mod font;
 pub use device::RenderDevice;
+pub use font::{Font, FontDesc};
 pub mod instance_data;
 pub use instance_data::{SpriteInstanceData, StaticInstanceData};
 pub mod resources;
 pub use resources::{Resource, ResourceHandle, ResourcePool};
 pub mod render_data;
-pub use render_data::{RenderData, StaticRenderJob};
+pub use render_data::{
+    RenderData, SkeletalRenderJob, SpriteRenderJob, SpriteRenderMode, StaticRenderJob,
+};

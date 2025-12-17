@@ -124,6 +124,13 @@ impl SubmitJob for SkeletalRenderJob<'_> {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub enum SpriteRenderMode {
+    Normal = 0,
+    Font = 1, // Uses MSDF rendering for
+}
+
 #[allow(dead_code)]
 pub struct SpriteRenderJob {
     pub position: Vec2,
@@ -132,6 +139,8 @@ pub struct SpriteRenderJob {
     pub color: Vec4,
     pub tex_coord: Vec2,
     pub tex_scale: Vec2,
+    pub layer: u32,
+    pub mode: SpriteRenderMode,
 }
 
 impl Default for SpriteRenderJob {
@@ -143,6 +152,8 @@ impl Default for SpriteRenderJob {
             color: Vec4::ONE,
             tex_coord: Vec2::ZERO,
             tex_scale: Vec2::ONE,
+            layer: 0,
+            mode: SpriteRenderMode::Normal,
         }
     }
 }
@@ -161,6 +172,9 @@ impl SubmitJob for SpriteRenderJob {
             color: self.color.to_data(),
             tex_coord: self.tex_coord.to_data(),
             tex_scale: self.tex_scale.to_data(),
+            mode: self.mode as u32,
+            layer: self.layer,
+            ..Default::default()
         });
     }
 }

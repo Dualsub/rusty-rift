@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::renderer::{
-    Animation, MaterialInstance, MaterialPipeline, MeshDrawInfo, SkeletalMesh, StaticMesh, Texture,
+    Animation, Font, MaterialInstance, MaterialPipeline, MeshDrawInfo, SkeletalMesh, StaticMesh,
+    Texture,
 };
 
 #[allow(dead_code)]
@@ -12,6 +13,7 @@ pub enum Resource {
     Texture(Texture),
     MaterialPipeline(MaterialPipeline),
     MaterialInstance(MaterialInstance),
+    Font(Font),
 }
 
 pub type ResourceHandle = u64;
@@ -110,6 +112,27 @@ impl ResourcePool {
         match self.get_resource(handle) {
             Some(resource) => match resource {
                 Resource::Animation(animation) => Some(animation),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_font(&self, handle: ResourceHandle) -> Option<&Font> {
+        match self.get_resource(handle) {
+            Some(resource) => match resource {
+                Resource::Font(font) => Some(font),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub fn get_texture(&self, handle: ResourceHandle) -> Option<&Texture> {
+        match self.get_resource(handle) {
+            Some(resource) => match resource {
+                Resource::Texture(texture) => Some(texture),
                 _ => None,
             },
             _ => None,

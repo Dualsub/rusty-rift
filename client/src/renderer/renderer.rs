@@ -293,36 +293,40 @@ impl Renderer {
             .expect("Could not create fullscreen mesh");
 
         let quad_vertices: [StaticMeshVertex; 4] = [
+            // bottom-left
             StaticMeshVertex {
                 position: [0.0, 0.0, 0.0],
-                uvs: [0.0, 0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
                 normal: [0.0, 0.0, 1.0],
-            },
-            StaticMeshVertex {
-                position: [1.0, 0.0, 0.0],
-                uvs: [1.0, 0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                normal: [0.0, 0.0, 1.0],
-            },
-            StaticMeshVertex {
-                position: [1.0, 1.0, 0.0],
-                uvs: [1.0, 1.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                normal: [0.0, 0.0, 1.0],
-            },
-            StaticMeshVertex {
-                position: [0.0, 1.0, 0.0],
                 uvs: [0.0, 1.0, 0.0],
                 color: [1.0, 1.0, 1.0, 1.0],
+            },
+            // bottom-right
+            StaticMeshVertex {
+                position: [1.0, 0.0, 0.0],
                 normal: [0.0, 0.0, 1.0],
+                uvs: [1.0, 1.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            // top-right
+            StaticMeshVertex {
+                position: [1.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uvs: [1.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            // top-left
+            StaticMeshVertex {
+                position: [0.0, 1.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uvs: [0.0, 0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
             },
         ];
 
         let quad_mesh = render_device
             .create_mesh(&MeshLoadDesc {
                 vertex_data: bytemuck::cast_slice(quad_vertices.as_slice()).to_vec(),
-                indices: vec![0, 1, 2, 2, 3, 0],
+                indices: vec![0, 1, 2, 0, 2, 3],
                 ..Default::default()
             })
             .expect("Could not create quad mesh");
@@ -1265,12 +1269,42 @@ impl Renderer {
         handle
     }
 
-    pub fn create_material(&mut self, name: &'static str, texture_bytes: &[u8]) -> ResourceHandle {
+    pub fn load_texture(&mut self, name: &'static str, bytes: &[u8]) -> ResourceHandle {
         let handle = get_handle(name);
         let texture = self
             .render_device
-            .load_texture(texture_bytes)
+            .load_texture(bytes)
             .expect("Failed to load texture");
+
+        self.resource_pool
+            .add_resource(handle, Resource::Texture(texture));
+
+        handle
+    }
+
+    pub fn load_font(&mut self, name: &'static str, bytes: &[u8]) -> ResourceHandle {
+        let handle = get_handle(name);
+        let font = self
+            .render_device
+            .load_font(bytes)
+            .expect("Failed to load font");
+
+        self.resource_pool
+            .add_resource(handle, Resource::Font(font));
+
+        handle
+    }
+
+    pub fn create_material(
+        &mut self,
+        name: &'static str,
+        texture_handle: ResourceHandle,
+    ) -> ResourceHandle {
+        let handle = get_handle(name);
+        let texture = self
+            .resource_pool
+            .get_texture(texture_handle)
+            .expect("Failed to get texture");
 
         let material_instance = self.render_device.create_material_instance(
             &self.scene_material_pipeline.static_material_pipeline, // Need to be looked over later
@@ -1297,13 +1331,13 @@ impl Renderer {
     pub fn create_sprite_material(
         &mut self,
         name: &'static str,
-        texture_bytes: &[u8],
+        texture_handle: ResourceHandle,
     ) -> ResourceHandle {
         let handle = get_handle(name);
         let texture = self
-            .render_device
-            .load_texture(texture_bytes)
-            .expect("Failed to load texture");
+            .resource_pool
+            .get_texture(texture_handle)
+            .expect("Failed to get texture");
 
         let material_instance = self.render_device.create_material_instance(
             &self.sprite_material_pipeline, // Need to be looked over later
@@ -1312,6 +1346,39 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 0,
                         resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.default_sampler),
+                    },
+                ],
+            },
+        );
+
+        self.resource_pool
+            .add_resource(handle, Resource::MaterialInstance(material_instance));
+
+        handle
+    }
+
+    pub fn create_font_material(
+        &mut self,
+        name: &'static str,
+        font_handle: ResourceHandle,
+    ) -> ResourceHandle {
+        let handle = get_handle(name);
+        let font = self
+            .resource_pool
+            .get_font(font_handle)
+            .expect("Failed to get font");
+
+        let material_instance = self.render_device.create_material_instance(
+            &self.sprite_material_pipeline, // Need to be looked over later
+            &MaterialInstanceDesc {
+                entires: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&font.atlas.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,

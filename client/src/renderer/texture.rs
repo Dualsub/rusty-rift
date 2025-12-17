@@ -79,6 +79,7 @@ impl TextureDesc {
             1 => match self.channel_count {
                 1 => Ok(wgpu::TextureFormat::R8Unorm),
                 2 => Ok(wgpu::TextureFormat::Rg8Unorm),
+                3 => Ok(wgpu::TextureFormat::Rgba8UnormSrgb),
                 4 => Ok(wgpu::TextureFormat::Rgba8Unorm),
                 _ => Err(format!(
                     "Unknown channel count for {}: {}",
