@@ -8,8 +8,7 @@ use shared::{
 use crate::{
     input::{InputAction, InputState},
     renderer::{
-        Renderer, ResourceHandle, SkeletalRenderJob, SpriteRenderJob, SpriteRenderMode,
-        StaticRenderJob,
+        Renderer, ResourceHandle, SkeletalRenderJob, StaticRenderJob,
         animation::{AnimationInstance, Pose},
         resources::get_handle,
     },
@@ -337,16 +336,6 @@ impl Game {
             mesh: get_handle("Floor"),
             color: Vec4::new(0.651, 0.541, 0.392, 1.0),
             tex_scale: Vec2::ONE * 10.0,
-            ..Default::default()
-        });
-
-        renderer.submit(&SpriteRenderJob {
-            position: Vec2::new(-1.0, -1.0),
-            size: Vec2::new(2.0, 2.0),
-            material: get_handle("DefaultFontMaterial"),
-            color: Vec4::new(1.0, 1.0, 1.0, 1.0),
-            tex_scale: Vec2::ONE,
-            mode: SpriteRenderMode::Font,
             ..Default::default()
         });
 
