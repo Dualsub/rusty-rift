@@ -10,6 +10,7 @@ use crate::renderer::{
     SkeletalMeshVertex, SpriteInstanceData, StaticInstanceData, StaticMesh, StaticMeshVertex,
     Texture, TextureDesc,
     animation::{AnimationInstance, Pose},
+    mesh,
     render_data::SubmitJob,
     resources::get_handle,
 };
@@ -37,6 +38,7 @@ struct SpriteUniformBufferData {
 pub struct RenderBatch {
     pub material_instance: ResourceHandle,
     pub mesh: ResourceHandle,
+    pub layer: u32,
     pub instance_range: Range<u32>,
 }
 
@@ -1151,30 +1153,50 @@ impl Renderer {
         batches: &[RenderBatch],
     ) {
         render_pass.set_pipeline(&material_pipeline.pipeline);
-        for batch in batches {
-            let material_instance = self
-                .resource_pool
-                .get_material_instance(batch.material_instance)
-                .unwrap();
 
-            let mut bind_group_index: u32 = 0;
-            for bind_group in bind_groups {
-                render_pass.set_bind_group(bind_group_index, *bind_group, &[]);
-                bind_group_index += 1;
+        let mut current_material_instance: Option<ResourceHandle> = None;
+        let mut current_mesh: Option<ResourceHandle> = None;
+        let mut index_count: u32 = 0;
+
+        for batch in batches {
+            let material_changed = match current_material_instance {
+                Some(handle) => handle != batch.material_instance,
+                None => true,
+            };
+
+            if material_changed {
+                let material_instance = self
+                    .resource_pool
+                    .get_material_instance(batch.material_instance)
+                    .unwrap();
+
+                let mut bind_group_index: u32 = 0;
+                for bind_group in bind_groups {
+                    render_pass.set_bind_group(bind_group_index, *bind_group, &[]);
+                    bind_group_index += 1;
+                }
+
+                render_pass.set_bind_group(bind_group_index, &material_instance.bind_group, &[]);
+
+                current_material_instance = Some(batch.material_instance);
             }
 
-            render_pass.set_bind_group(bind_group_index, &material_instance.bind_group, &[]);
+            let mesh_changed = match current_mesh {
+                Some(handle) => handle != batch.mesh,
+                None => true,
+            };
 
-            let mesh_draw_info = self.resource_pool.get_mesh_draw_info(batch.mesh).unwrap();
-            render_pass.set_vertex_buffer(0, mesh_draw_info.vertex_slice);
-            render_pass.set_index_buffer(mesh_draw_info.index_slice, wgpu::IndexFormat::Uint32);
+            if mesh_changed {
+                let mesh_draw_info = self.resource_pool.get_mesh_draw_info(batch.mesh).unwrap();
+                render_pass.set_vertex_buffer(0, mesh_draw_info.vertex_slice);
+                render_pass.set_index_buffer(mesh_draw_info.index_slice, wgpu::IndexFormat::Uint32);
+
+                current_mesh = Some(batch.mesh);
+                index_count = mesh_draw_info.index_count;
+            }
 
             // We can clone the range, it is very small so it is fine
-            render_pass.draw_indexed(
-                0..mesh_draw_info.index_count,
-                0,
-                batch.instance_range.clone(),
-            );
+            render_pass.draw_indexed(0..index_count, 0, batch.instance_range.clone());
         }
     }
 

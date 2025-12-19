@@ -20,6 +20,7 @@ struct InstancedRenderJob<T> {
 struct BatchKey {
     material: ResourceHandle,
     mesh: ResourceHandle,
+    layer: u32,
 }
 
 pub struct StaticRenderJob {
@@ -49,6 +50,7 @@ impl SubmitJob for StaticRenderJob {
         let key = BatchKey {
             mesh: self.mesh,
             material: self.material,
+            layer: 0,
         };
 
         let instanced_job = render_data.static_jobs.entry(key).or_default();
@@ -92,6 +94,7 @@ impl SubmitJob for SkeletalRenderJob<'_> {
         let key = BatchKey {
             mesh: self.mesh,
             material: self.material,
+            layer: 0,
         };
 
         let pose = self.pose.expect("Pose was None");
@@ -192,6 +195,7 @@ impl SubmitJob for SpriteRenderJob {
         let key = BatchKey {
             mesh: Renderer::QUAD_MESH,
             material: self.material,
+            layer: self.layer,
         };
 
         let instanced_job = render_data.sprite_jobs.entry(key).or_default();
@@ -255,6 +259,7 @@ impl SubmitJob for TextRenderJob<'_> {
         let key = BatchKey {
             mesh: Renderer::QUAD_MESH,
             material: self.font_material,
+            layer: self.layer,
         };
 
         let font = resource_pool
@@ -361,10 +366,12 @@ impl RenderData {
             batches.push(RenderBatch {
                 material_instance: key.material,
                 mesh: key.mesh,
+                layer: key.layer,
                 instance_range: Range { start, end },
             });
         }
 
+        batches.sort_by_key(|b| (b.material_instance, b.mesh, b.layer));
         (batches, instances)
     }
 
