@@ -128,9 +128,34 @@ impl SubmitJob for SkeletalRenderJob<'_> {
 #[derive(Debug, Copy, Clone)]
 pub enum SpriteRenderMode {
     Normal = 0,
-    Font = 1, // Uses MSDF rendering for
+    Msdf = 1,
 }
 
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub enum SpriteAnchor {
+    TopLeft = 0,
+    TopCenter = 1,
+    TopRight = 2,
+    CenterLeft = 3,
+    Center = 4,
+    CenterRight = 5,
+    BottomLeft = 6,
+    BottomCenter = 7,
+    BottomRight = 8,
+}
+
+#[allow(dead_code)]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub enum SpriteSpace {
+    Reference = 0,
+    Absolute = 1,
+    Normalized = 2,
+}
+
+#[derive(Debug)]
 #[allow(dead_code)]
 pub struct SpriteRenderJob {
     pub position: Vec2,
@@ -141,6 +166,8 @@ pub struct SpriteRenderJob {
     pub tex_scale: Vec2,
     pub layer: u32,
     pub mode: SpriteRenderMode,
+    pub anchor: SpriteAnchor,
+    pub space: SpriteSpace,
 }
 
 impl Default for SpriteRenderJob {
@@ -154,6 +181,8 @@ impl Default for SpriteRenderJob {
             tex_scale: Vec2::ONE,
             layer: 0,
             mode: SpriteRenderMode::Normal,
+            anchor: SpriteAnchor::TopLeft,
+            space: SpriteSpace::Reference,
         }
     }
 }
@@ -174,8 +203,116 @@ impl SubmitJob for SpriteRenderJob {
             tex_scale: self.tex_scale.to_data(),
             mode: self.mode as u32,
             layer: self.layer,
+            anchor: self.anchor as u32,
+            space: self.space as u32,
             ..Default::default()
         });
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Copy, Clone)]
+pub enum TextAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct TextRenderJob<'a> {
+    pub text: &'a str,
+    pub font_atlas: ResourceHandle,
+    pub font_material: ResourceHandle,
+    pub position: Vec2,
+    pub size: f32,
+    pub color: Vec4,
+    pub layer: u32,
+    pub alignment: TextAlignment,
+    pub anchor: SpriteAnchor,
+    pub space: SpriteSpace,
+}
+
+impl Default for TextRenderJob<'_> {
+    fn default() -> Self {
+        Self {
+            text: "",
+            font_atlas: 0,
+            font_material: 0,
+            position: Vec2::ZERO,
+            size: 1.0,
+            color: Vec4::ONE,
+            layer: 0,
+            alignment: TextAlignment::Left,
+            anchor: SpriteAnchor::TopLeft,
+            space: SpriteSpace::Reference,
+        }
+    }
+}
+
+impl SubmitJob for TextRenderJob<'_> {
+    fn submit(&self, render_data: &mut RenderData, resource_pool: &ResourcePool) {
+        let key = BatchKey {
+            mesh: Renderer::QUAD_MESH,
+            material: self.font_material,
+        };
+
+        let font = resource_pool
+            .get_font(self.font_atlas)
+            .expect("Failed to get font atlas");
+
+        let mut render_position = self.position;
+        match self.alignment {
+            TextAlignment::Left => {}
+            TextAlignment::Center => {
+                let text_width: f32 = self
+                    .text
+                    .chars()
+                    .filter_map(|c| font.get_glyph(&(c as u32)))
+                    .map(|g| g.advance * self.size)
+                    .sum();
+                render_position.x -= text_width * 0.5;
+            }
+            TextAlignment::Right => {
+                let text_width: f32 = self
+                    .text
+                    .chars()
+                    .filter_map(|c| font.get_glyph(&(c as u32)))
+                    .map(|g| g.advance * self.size)
+                    .sum();
+                render_position.x -= text_width;
+            }
+        }
+
+        let glyphs = font.get_glyphs(self.text);
+        let instanced_job = render_data.sprite_jobs.entry(key).or_default();
+        for glyph in glyphs {
+            match glyph {
+                Some(glyph) => {
+                    match (&glyph.uv, &glyph.plane) {
+                        (Some(uv), Some(plane)) => {
+                            let position = render_position + plane.offset * self.size;
+                            let size = plane.size * self.size;
+
+                            instanced_job.instances.push(SpriteInstanceData {
+                                position: position.to_data(),
+                                scale: size.to_data(),
+                                color: self.color.to_data(),
+                                tex_coord: uv.offset.to_data(),
+                                tex_scale: uv.size.to_data(),
+                                mode: SpriteRenderMode::Msdf as u32,
+                                layer: self.layer,
+                                space: self.space as u32,
+                                anchor: self.anchor as u32,
+                            });
+                        }
+                        _ => {}
+                    }
+                    render_position.x += glyph.advance * self.size;
+                }
+                _ => {}
+            }
+        }
     }
 }
 

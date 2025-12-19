@@ -1,15 +1,20 @@
 // Vertex shader
 
+struct UniformBuffer {
+    // x = screen_w_px, y = screen_h_px, z = ui_scale, w unused
+    screen_size_and_ui_scale: vec4<f32>,
+};
+
 struct Instance {
-    position_and_scale: vec4<f32>,
+    position_and_scale: vec4<f32>, // xy = pos_ref_offset, zw = size_ref
     color: vec4<f32>,
-    tex_bounds: vec4<f32>,
-    mode: u32,
-}
+    tex_bounds: vec4<f32>,         // xy = uv_min, zw = uv_extent
+    mode_layer_anchor_space: vec4<u32>, // x=mode, y=layer, z=anchor, w unused here
+};
 
 struct VertexInput {
     @builtin(instance_index) instance_index: u32,
-    @location(0) position: vec3<f32>,
+    @location(0) position: vec3<f32>, // unit quad 0..1 (y-up in mesh)
     @location(1) normal: vec3<f32>,
     @location(2) uvs: vec3<f32>,
     @location(3) color: vec4<f32>,
@@ -20,21 +25,63 @@ struct VertexOutput {
     @location(0) tex_coords: vec3<f32>,
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) mode: u32,
+    @location(3) @interpolate(flat) layer: u32,
 };
 
-@group(0) @binding(0) var<storage, read> instance_buffer: array<Instance>;
+@group(0) @binding(0) var<uniform> uniform_buffer: UniformBuffer;
+@group(0) @binding(1) var<storage, read> instance_buffer: array<Instance>;
+
+fn anchor_origin_px(anchor: u32, screen_px: vec2<f32>) -> vec2<f32> {
+    let ax = anchor % 3u;
+    let ay = anchor / 3u;
+    let ox = select(0.0, select(0.5, 1.0, ax == 2u), ax != 0u);
+    let oy = select(0.0, select(0.5, 1.0, ay == 2u), ay != 0u);
+    return vec2<f32>(ox * screen_px.x, oy * screen_px.y);
+}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-    let position = vec4<f32>(in.position, 1.0);
-
     let instance = instance_buffer[in.instance_index];
 
+    let screen_px = uniform_buffer.screen_size_and_ui_scale.xy;
+    let ui_scale = uniform_buffer.screen_size_and_ui_scale.z;
+
+    let mode = instance.mode_layer_anchor_space.x;
+    let layer = instance.mode_layer_anchor_space.y;
+    let anchor = instance.mode_layer_anchor_space.z;
+    let space = instance.mode_layer_anchor_space.w;
+
     var out: VertexOutput;
-    out.tex_coords = vec3<f32>(instance.tex_bounds.xy + in.uvs.xy * instance.tex_bounds.zw, in.uvs.z);
-    out.clip_position = vec4<f32>(instance.position_and_scale.xy + position.xy * instance.position_and_scale.zw, 0.0, 1.0);
+
+    if (space == 0) { // Reference space
+        let local01 = vec2<f32>(in.position.x, 1.0 - in.position.y);
+        let anchor_px = anchor_origin_px(anchor, screen_px);
+        let pos_px  = anchor_px + instance.position_and_scale.xy * ui_scale;
+        let size_px = instance.position_and_scale.zw * ui_scale;
+        let p_px = pos_px + local01 * size_px;
+        let ndc_x = (p_px.x / screen_px.x) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (p_px.y / screen_px.y) * 2.0;
+        out.clip_position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    } else if (space == 1) { // Absolute space
+        let local01 = vec2<f32>(in.position.x, 1.0 - in.position.y);
+        let anchor_px = anchor_origin_px(anchor, screen_px);
+        let pos_px = anchor_px + instance.position_and_scale.xy;
+        let size_px = instance.position_and_scale.zw;
+        let p_px = pos_px + local01 * size_px;
+        let ndc_x = (p_px.x / screen_px.x) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (p_px.y / screen_px.y) * 2.0;
+        out.clip_position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    } else {
+        out.clip_position = vec4<f32>(in.position.x, 1.0 - in.position.y, 0.0, 1.0);
+    }
+
+    out.tex_coords = vec3<f32>(
+        instance.tex_bounds.xy + in.uvs.xy * instance.tex_bounds.zw,
+        f32(layer)
+    );
     out.color = in.color * instance.color;
-    out.mode = instance.mode;
+    out.mode = mode;
+    out.layer = layer;
 
     return out;
 }
@@ -66,14 +113,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(f32(tex_size_u.x), f32(tex_size_u.y));
 
     let texel = textureSample(texture, texture_sampler, in.tex_coords.xy, i32(in.tex_coords.z));
-
-    // Always compute (keeps fwidth in uniform control flow)
     let msdf_opacity = msdf_opacity_from_texel(texel, in.tex_coords.xy, tex_size);
-
-    // mode: 0 = sprite, 1 = msdf. Convert to 0.0/1.0 for mixing.
     let use_msdf = select(0.0, 1.0, in.mode != 0u);
-
-    // Sprite path keeps sampled alpha. MSDF path uses computed opacity.
     let alpha = mix(texel.a, msdf_opacity, use_msdf);
 
     let sprite_rgb = texel.rgb * in.color.rgb;

@@ -84,7 +84,7 @@ impl FontDesc {
             }
 
             let glyph = Glyph {
-                unicode,
+                _unicode: unicode,
                 advance,
                 plane: bounds,
                 uv: uv_bounds,
@@ -103,21 +103,33 @@ impl FontDesc {
 
 #[derive(Debug)]
 pub struct Bounds {
-    offset: Vec2,
-    size: Vec2,
+    pub offset: Vec2,
+    pub size: Vec2,
 }
 
 #[derive(Debug)]
-struct Glyph {
-    unicode: u32,
-    advance: f32,
-    plane: Option<Bounds>,
-    uv: Option<Bounds>,
+pub struct Glyph {
+    pub _unicode: u32,
+    pub advance: f32,
+    pub plane: Option<Bounds>,
+    pub uv: Option<Bounds>,
 }
 
 pub struct Font {
     pub glyphs: HashMap<u32, Glyph>,
     pub atlas: Texture,
+}
+
+impl Font {
+    pub fn get_glyph(&self, unicode: &u32) -> Option<&Glyph> {
+        self.glyphs.get(unicode)
+    }
+
+    pub fn get_glyphs(&self, text: &str) -> impl Iterator<Item = Option<&Glyph>> {
+        text.as_bytes()
+            .iter()
+            .map(|u| self.glyphs.get(&(*u as u32)))
+    }
 }
 
 impl RenderDevice {

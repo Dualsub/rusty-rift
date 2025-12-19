@@ -1,4 +1,3 @@
-use glam::U8Vec4;
 use shared::{math::*, transform::Transform};
 use std::ops::Range;
 use std::sync::Arc;
@@ -6,8 +5,8 @@ use wgpu::BufferUsages;
 use winit::window::Window;
 
 use crate::renderer::{
-    Buffer, BufferDesc, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc, MeshLoadDesc,
-    PassTarget, RenderData, RenderDevice, Resource, ResourceHandle, ResourcePool,
+    Buffer, BufferDesc, Glyph, MaterialInstanceDesc, MaterialPipeline, MaterialPipelineDesc,
+    MeshLoadDesc, PassTarget, RenderData, RenderDevice, Resource, ResourceHandle, ResourcePool,
     SkeletalMeshVertex, SpriteInstanceData, StaticInstanceData, StaticMesh, StaticMeshVertex,
     Texture, TextureDesc,
     animation::{AnimationInstance, Pose},
@@ -25,6 +24,14 @@ struct UniformBufferData {
     light_matrix: Mat4Data,
     light_direction: Vec4Data,
     light_color: Vec4Data,
+}
+
+#[repr(C)]
+#[derive(Default, Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SpriteUniformBufferData {
+    pub screen_size: Vec2Data,
+    pub ui_scale: f32,
+    _padding: f32,
 }
 
 pub struct RenderBatch {
@@ -133,12 +140,14 @@ pub struct Renderer {
 
     camera_projection_matrix: Mat4,
     camera_transform: Transform,
-    uniform_buffer: Buffer,
     uniform_data: UniformBufferData,
+    sprite_uniform_data: SpriteUniformBufferData,
 
+    uniform_buffer: Buffer,
     static_instance_buffer: Buffer,
     skeletal_instance_buffer: Buffer,
     bone_buffer: Buffer,
+    sprite_uniform_buffer: Buffer,
     sprite_instance_buffer: Buffer,
 
     render_data: RenderData,
@@ -152,6 +161,7 @@ impl Renderer {
     const BONE_COUNT: usize = Self::STATIC_INSTANCE_COUNT * 64;
     const SRPITE_INSTANCE_COUNT: usize = 2046;
 
+    pub const SPRITE_SCREEN_REFERENCE: Vec2 = Vec2::new(1920.0, 1080.0);
     pub const QUAD_MESH: ResourceHandle = get_handle("quad");
     pub const WHITE_SPRITE_MATERIAL: ResourceHandle = get_handle("white_sprite_material");
 
@@ -365,11 +375,17 @@ impl Renderer {
         )
     }
 
-    fn create_uniform_buffer(render_device: &RenderDevice) -> Buffer {
-        render_device.create_buffer(&BufferDesc {
-            size: std::mem::size_of::<UniformBufferData>(),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        })
+    fn create_uniform_buffers(render_device: &RenderDevice) -> (Buffer, Buffer) {
+        (
+            render_device.create_buffer(&BufferDesc {
+                size: std::mem::size_of::<UniformBufferData>(),
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            }),
+            render_device.create_buffer(&BufferDesc {
+                size: std::mem::size_of::<SpriteUniformBufferData>(),
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            }),
+        )
     }
 
     fn create_bind_collections(
@@ -535,18 +551,31 @@ impl Renderer {
 
     fn create_sprite_pipeline(
         render_device: &RenderDevice,
+        uniform_buffer: &Buffer,
         instance_buffer: &Buffer,
     ) -> (BindCollection, MaterialPipeline) {
-        let bind_collection = render_device.create_bind_collection(vec![BindEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        let bind_collection = render_device.create_bind_collection(vec![
+            BindEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: uniform_buffer.buffer.as_entire_binding(),
             },
-            resource: instance_buffer.buffer.as_entire_binding(),
-        }]);
+            BindEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                resource: instance_buffer.buffer.as_entire_binding(),
+            },
+        ]);
 
         let sprite_shader =
             render_device
@@ -781,7 +810,7 @@ impl Renderer {
 
         let (static_instance_buffer, skeletal_instance_buffer, bone_buffer, sprite_instance_buffer) =
             Self::create_storage_buffers(&render_device);
-        let uniform_buffer = Self::create_uniform_buffer(&render_device);
+        let (uniform_buffer, sprite_uniform_buffer) = Self::create_uniform_buffers(&render_device);
 
         let (
             static_scene_bind_collection,
@@ -798,8 +827,11 @@ impl Renderer {
             &bone_buffer,
         );
 
-        let (sprite_bind_collection, sprite_material_pipeline) =
-            Self::create_sprite_pipeline(&render_device, &sprite_instance_buffer);
+        let (sprite_bind_collection, sprite_material_pipeline) = Self::create_sprite_pipeline(
+            &render_device,
+            &sprite_uniform_buffer,
+            &sprite_instance_buffer,
+        );
 
         let (composite_bind_collection, composite_material_pipeline) =
             Self::create_composite_pipeline(&render_device, &scene_texture, &default_sampler);
@@ -848,6 +880,7 @@ impl Renderer {
             camera_projection_matrix: Mat4::IDENTITY,
             render_data: RenderData::new(),
             uniform_buffer,
+            sprite_uniform_buffer,
             uniform_data: UniformBufferData {
                 view_matrix: Mat4::IDENTITY.to_data(),
                 projection_matrix: Mat4::IDENTITY.to_data(),
@@ -856,6 +889,7 @@ impl Renderer {
                 light_direction: [0.0, -1.0, -1.0, 0.0],
                 light_color: [1.0, 1.0, 1.0, 1.0],
             },
+            sprite_uniform_data: Default::default(),
             composite_bind_collection,
             composite_material_pipeline,
             static_instance_buffer,
@@ -878,6 +912,12 @@ impl Renderer {
                 .surface
                 .configure(&render_device.device, &render_device.config);
             render_device.is_surface_configured = true;
+
+            self.sprite_uniform_data.screen_size = [width as f32, height as f32];
+            self.sprite_uniform_data.ui_scale = f32::min(
+                width as f32 / Self::SPRITE_SCREEN_REFERENCE.x,
+                height as f32 / Self::SPRITE_SCREEN_REFERENCE.y,
+            );
 
             self.depth_buffer = Renderer::create_depth_buffer(&render_device);
             self.scene_texture = Renderer::create_scene_texture(&render_device);
@@ -928,6 +968,12 @@ impl Renderer {
         self.render_device.write_buffer(
             &self.uniform_buffer,
             bytemuck::bytes_of(&self.uniform_data),
+            0,
+        );
+
+        self.render_device.write_buffer(
+            &self.sprite_uniform_buffer,
+            bytemuck::bytes_of(&self.sprite_uniform_data),
             0,
         );
     }
@@ -1078,12 +1124,15 @@ impl Renderer {
                 render_pass.draw_indexed(0..draw_info.index_count, 0, 0..1);
             }
 
-            self.render_batches(
-                &mut render_pass,
-                &self.sprite_material_pipeline,
-                &[&self.sprite_bind_collection.bind_group],
-                &draw_data.sprite_batches,
-            );
+            // Sprite Rendering
+            {
+                self.render_batches(
+                    &mut render_pass,
+                    &self.sprite_material_pipeline,
+                    &[&self.sprite_bind_collection.bind_group],
+                    &draw_data.sprite_batches,
+                );
+            }
         }
 
         self.render_device
@@ -1328,6 +1377,7 @@ impl Renderer {
         handle
     }
 
+    #[allow(dead_code)]
     pub fn create_sprite_material(
         &mut self,
         name: &'static str,
@@ -1441,6 +1491,20 @@ impl Renderer {
                 .expect("Could not find animation for instance");
             animation.sample_and_blend(instance.time, instance.looping, instance_weight, out_pose);
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_font_glyphs(
+        &self,
+        font_handle: ResourceHandle,
+        text: &str,
+    ) -> impl Iterator<Item = Option<&Glyph>> {
+        let font = self
+            .resource_pool
+            .get_font(font_handle)
+            .expect("Fialed to get animation to sample");
+
+        font.get_glyphs(text)
     }
 
     pub fn submit<T: SubmitJob>(&mut self, job: &T) {
