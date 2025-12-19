@@ -1,6 +1,6 @@
 use std::ops::Neg;
 
-pub use glam::{Mat4, Quat, Vec2, Vec2Swizzles, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
+pub use glam::{Mat4, Quat, UVec2, Vec2, Vec2Swizzles, Vec3, Vec3Swizzles, Vec4, Vec4Swizzles};
 
 pub type Mat4Data = [f32; 16];
 pub type Vec4Data = [f32; 4];
