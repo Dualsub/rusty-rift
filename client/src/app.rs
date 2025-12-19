@@ -1,6 +1,6 @@
 use std::{ops::Mul, sync::Arc};
 
-use glam::Vec2;
+use glam::{Vec2, Vec4};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use winit::{
@@ -11,10 +11,68 @@ use winit::{
     window::Window,
 };
 
-use crate::input::InputState;
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, SpriteAnchor, SpriteSpace, TextAlignment, resources::get_handle};
 use crate::{game::Game, input::InputAction};
+use crate::{input::InputState, renderer::render_data::TextRenderJob};
 use shared::physics::PhysicsWorld;
+
+pub struct PerformanceMetrics {
+    pub delta_times: Vec<f32>,
+    pub time_since_update: f32,
+    pub max_ms: f32,
+    pub avg_fps: u32,
+    pub info: String,
+}
+
+impl PerformanceMetrics {
+    const UPDATE_INTERVAL: f32 = 1.0;
+
+    pub fn new() -> Self {
+        Self {
+            delta_times: Vec::new(),
+            time_since_update: 0.0,
+            max_ms: 0.0,
+            avg_fps: 0,
+            info: String::new(),
+        }
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        self.delta_times.push(dt);
+        self.time_since_update += dt;
+        if self.time_since_update >= Self::UPDATE_INTERVAL {
+            let frame_count = self.delta_times.len() as f32;
+            self.avg_fps = (frame_count / self.time_since_update).round() as u32;
+            self.max_ms = 0.0;
+            for &dt in self.delta_times.iter() {
+                let ms = dt.mul(1000.0);
+                if ms > self.max_ms {
+                    self.max_ms = ms;
+                }
+            }
+            self.delta_times.clear();
+            self.time_since_update = 0.0;
+
+            self.info = format!("Max: {:.2} ms | Avg FPS: {}", self.max_ms, self.avg_fps);
+        }
+    }
+
+    pub fn render(&self, renderer: &mut Renderer) {
+        renderer.submit(&TextRenderJob {
+            font_atlas: get_handle("DebugFont"),
+            font_material: get_handle("DebugFontMaterial"),
+            text: self.info.as_str(),
+            position: Vec2::new(-5.0, 20.0),
+            size: 20.0,
+            color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+            layer: 0,
+            anchor: SpriteAnchor::TopRight,
+            space: SpriteSpace::Absolute,
+            alignment: TextAlignment::Right,
+            ..Default::default()
+        });
+    }
+}
 
 pub struct State {
     pub window: Arc<Window>,
@@ -22,6 +80,7 @@ pub struct State {
     pub physics_world: PhysicsWorld,
     pub game: Game,
     pub input_state: InputState,
+    pub metrics: PerformanceMetrics,
 
     pub previous_time: f64,
     pub time_since_fixed: f32,
@@ -43,7 +102,13 @@ impl State {
         let input_state = InputState::new();
 
         game.initialize(&mut physics_world);
-        game.load_resources(&mut renderer);
+
+        {
+            let font_handle =
+                renderer.load_font("DebugFont", include_bytes!("../res/font/fira.dat"));
+            renderer.create_font_material("DebugFontMaterial", font_handle);
+            game.load_resources(&mut renderer);
+        }
 
         Ok(Self {
             window,
@@ -53,6 +118,7 @@ impl State {
             input_state,
             previous_time: get_time(),
             time_since_fixed: 0.0,
+            metrics: PerformanceMetrics::new(),
         })
     }
 
@@ -63,6 +129,7 @@ impl State {
 
     pub fn update(&mut self, dt: f32, alpha: f32) {
         self.game.update(dt, alpha, &self.input_state);
+        self.metrics.update(dt);
     }
 
     pub fn fixed_update(&mut self, dt: f32) {
@@ -72,6 +139,7 @@ impl State {
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.game.render(&mut self.renderer);
         self.window.request_redraw();
+        self.metrics.render(&mut self.renderer);
         self.renderer.render()
     }
 
