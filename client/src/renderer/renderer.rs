@@ -10,7 +10,6 @@ use crate::renderer::{
     SkeletalMeshVertex, SpriteInstanceData, StaticInstanceData, StaticMesh, StaticMeshVertex,
     Texture, TextureDesc,
     animation::{AnimationInstance, Pose},
-    mesh,
     render_data::SubmitJob,
     resources::get_handle,
 };
