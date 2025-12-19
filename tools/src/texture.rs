@@ -17,14 +17,17 @@ fn mip_level_count(width: u32, height: u32) -> u32 {
     32 - max_side.leading_zeros()
 }
 
-pub fn write_texture(img: &image::DynamicImage, file: &mut File) -> anyhow::Result<()> {
+pub fn write_texture(
+    img: &image::DynamicImage,
+    mip_level_count: u32,
+    file: &mut File,
+) -> anyhow::Result<()> {
     let width = img.width();
     let height = img.height();
     let layer_count: u32 = 1;
     let color = img.color();
     let channel_count = color.channel_count() as u32;
     let bytes_per_channel = (color.bytes_per_pixel() as u32) / channel_count;
-    let mip_level_count = mip_level_count(width, height);
 
     println!(
         "Loaded {}x{}x{} of {:?}.",
@@ -82,10 +85,10 @@ pub fn load(desc: &TextureLoadDesc) -> anyhow::Result<()> {
     }
 
     let mut file = File::create(desc.output).expect("Could not open output file.");
-    write_texture(&img, &mut file)?;
+    let mip_level_count = mip_level_count(img.width(), img.height());
+    write_texture(&img, mip_level_count, &mut file)?;
 
     let layer_count: u32 = 1;
-    let mip_level_count = mip_level_count(img.width(), img.height());
 
     println!(
         "Packed image into {}. Generated {} layers, each with {} mips",

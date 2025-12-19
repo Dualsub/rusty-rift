@@ -82,7 +82,7 @@ pub fn load(desc: &FontLoadDesc) -> anyhow::Result<()> {
             (Some(plane_bounds), Some(atlas_bounds)) => {
                 file.write_all(&1u8.to_le_bytes())?;
 
-                let offset = [plane_bounds.left, plane_bounds.bottom];
+                let offset = [plane_bounds.left, -plane_bounds.top];
                 let size = [
                     plane_bounds.right - plane_bounds.left,
                     plane_bounds.top - plane_bounds.bottom,
@@ -93,14 +93,14 @@ pub fn load(desc: &FontLoadDesc) -> anyhow::Result<()> {
                 file.write_all(&size[0].to_le_bytes())?;
                 file.write_all(&size[1].to_le_bytes())?;
 
-                let uv = [
-                    atlas_bounds.left / font_atlas.width as f32,
-                    atlas_bounds.bottom / font_atlas.height as f32,
-                ];
-                let uv_size = [
-                    (atlas_bounds.right - atlas_bounds.left) / font_atlas.width as f32,
-                    (atlas_bounds.top - atlas_bounds.bottom) / font_atlas.height as f32,
-                ];
+                let u0 = atlas_bounds.left / font_atlas.width as f32;
+                let u1 = atlas_bounds.right / font_atlas.width as f32;
+
+                let v0 = 1.0 - (atlas_bounds.top / font_atlas.height as f32);
+                let v1 = 1.0 - (atlas_bounds.bottom / font_atlas.height as f32);
+
+                let uv = [u0, v0];
+                let uv_size = [u1 - u0, v1 - v0];
 
                 file.write_all(&uv[0].to_le_bytes())?;
                 file.write_all(&uv[1].to_le_bytes())?;
@@ -113,7 +113,7 @@ pub fn load(desc: &FontLoadDesc) -> anyhow::Result<()> {
         }
     }
 
-    texture::write_texture(&atlas, file)?;
+    texture::write_texture(&atlas, 1, file)?;
 
     Ok(())
 }
