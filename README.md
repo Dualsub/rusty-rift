@@ -16,13 +16,13 @@
 ### Phase 2
 
 - Simple physics engine
-    - [ ] Sphere on sphere collision and simulation 
+    - [x] Sphere on sphere collision and simulation 
 
 ### Phase 3
 
-- [ ] Game entities setup
-- [ ] Simple character movement
-- [ ] Very simple UI rendering
+- [x] Game entities setup
+- [x] Simple character movement
+- [x] Very simple UI rendering
 
 ### Phase 4
 
